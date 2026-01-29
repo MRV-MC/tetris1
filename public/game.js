@@ -862,13 +862,43 @@ function sendGameUpdate() {
 }
 
 function gameOver() {
-    gameRunning = false;
-    if (gameInterval) {
-        cancelAnimationFrame(gameInterval);
-        gameInterval = null;
-    }
+    // Don't stop the game, just restart the player
     soundManager.playGameOver();
     socket.emit('gameOver');
+    
+    // Restart player immediately
+    restartPlayer();
+}
+
+function restartPlayer() {
+    // Reset game state but keep game running
+    board = createBoard();
+    score = 0;
+    lines = 0;
+    level = 1;
+    dropSpeed = 700;
+    baseDropSpeed = 700;
+    garbageQueue = 0;
+    speedBoostActive = false;
+    speedBoostEndTime = 0;
+    lastUpdateTime = Date.now();
+    lastSentX = -1;
+    lastSentY = -1;
+    
+    // Update UI
+    document.getElementById('player-score').textContent = '0';
+    document.getElementById('player-lines').textContent = '0';
+    document.getElementById('player-level').textContent = '1';
+    
+    // Spawn new pieces
+    spawnPiece();
+    spawnNextPiece();
+    
+    // Reset drop timer
+    lastDrop = Date.now();
+    
+    // Draw initial state
+    draw();
 }
 
 // Opponent Updates
@@ -958,21 +988,88 @@ socket.on('receiveSpeedBoost', () => {
     console.log('Speed boost activated!');
 });
 
-// Game End
-socket.on('gameEnded', ({ winner, loser, hostScore, guestScore }) => {
-    gameRunning = false;
-    if (gameInterval) {
-        cancelAnimationFrame(gameInterval);
-        gameInterval = null;
+// Receive Piece Change Attack
+socket.on('receivePieceChange', () => {
+    if (!gameRunning || !currentPiece || !rng) return;
+    
+    // Change current piece to a random different one using seeded RNG
+    const types = Object.keys(PIECES);
+    let newType;
+    let attempts = 0;
+    do {
+        const index = Math.floor(rng.next() * types.length);
+        newType = types[index];
+        attempts++;
+    } while (newType === currentType && types.length > 1 && attempts < 10);
+    
+    // If still same type, force different one
+    if (newType === currentType && types.length > 1) {
+        const otherTypes = types.filter(t => t !== currentType);
+        newType = otherTypes[Math.floor(rng.next() * otherTypes.length)];
     }
     
-    document.getElementById('game-result').textContent = winner === playerName ? 'You Win!' : 'Game Over';
-    document.getElementById('winner-name').textContent = winner || 'Winner';
-    document.getElementById('loser-name').textContent = loser || 'Loser';
-    document.getElementById('winner-score').textContent = Math.max(hostScore, guestScore);
-    document.getElementById('loser-score').textContent = Math.min(hostScore, guestScore);
+    currentType = newType;
+    currentPiece = PIECES[currentType].map(row => [...row]);
     
-    gameOverModal.classList.remove('hidden');
+    // Adjust position if needed
+    const newWidth = currentPiece[0].length;
+    if (currentX + newWidth > COLS) {
+        currentX = Math.max(0, COLS - newWidth);
+    }
+    
+    // Center the piece
+    currentX = Math.floor((COLS - newWidth) / 2);
+    
+    // Check collision - if collision, try to move up
+    if (checkCollision(currentX, currentY, currentPiece)) {
+        currentY = Math.max(0, currentY - 1);
+        if (checkCollision(currentX, currentY, currentPiece)) {
+            // If still collision, try moving left/right
+            let found = false;
+            for (let offset = 1; offset <= 3 && !found; offset++) {
+                if (!checkCollision(currentX - offset, currentY, currentPiece)) {
+                    currentX -= offset;
+                    found = true;
+                } else if (!checkCollision(currentX + offset, currentY, currentPiece)) {
+                    currentX += offset;
+                    found = true;
+                }
+            }
+            if (!found) {
+                // If still collision, spawn new piece
+                spawnPiece();
+            }
+        }
+    }
+    
+    try {
+        soundManager.playRotate(); // Play sound effect
+    } catch (e) {
+        // Ignore sound errors
+    }
+    
+    sendGameUpdate();
+    draw();
+    console.log('Piece changed to:', newType);
+});
+
+// Player Restart (when player loses)
+socket.on('playerRestart', ({ seed, opponentScore }) => {
+    // Restart with new seed
+    gameSeed = seed;
+    rng = new SeededRandom(seed);
+    pieceIndex = 0;
+    
+    restartPlayer();
+    
+    // Show notification
+    console.log('You restarted! Opponent score:', opponentScore);
+});
+
+// Opponent Restarted notification
+socket.on('opponentRestarted', () => {
+    console.log('Opponent restarted!');
+    // Visual feedback could be added here
 });
 
 // Game Restart
@@ -1010,7 +1107,9 @@ document.getElementById('back-to-menu-btn').addEventListener('click', () => {
 let keyStates = {};
 let lastKeyPress = {};
 let comboKeys = { KeyG: false, KeyH: false, KeyJ: false };
+let comboKeysBNM = { KeyB: false, KeyN: false, KeyM: false };
 let lastComboTime = 0;
+let lastComboBNMTime = 0;
 
 document.addEventListener('keydown', (e) => {
     if (!gameRunning) return;
@@ -1037,8 +1136,27 @@ document.addEventListener('keydown', (e) => {
         }
     }
     
+    // Check for B+N+M combo
+    if (key === 'KeyB' || key === 'KeyN' || key === 'KeyM') {
+        comboKeysBNM[key] = true;
+        
+        // Check if all three keys are pressed
+        if (comboKeysBNM.KeyB && comboKeysBNM.KeyN && comboKeysBNM.KeyM) {
+            // Prevent spam - only trigger once per 2 seconds
+            if (now - lastComboBNMTime > 2000) {
+                lastComboBNMTime = now;
+                socket.emit('changePieceAttack');
+                try {
+                    soundManager.playRotate(); // Play sound effect
+                } catch (e) {
+                    // Ignore sound errors
+                }
+            }
+        }
+    }
+    
     // Prevent default for game keys
-    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyG', 'KeyH', 'KeyJ'].includes(key)) {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyG', 'KeyH', 'KeyJ', 'KeyB', 'KeyN', 'KeyM'].includes(key)) {
         e.preventDefault();
     }
     
@@ -1084,6 +1202,11 @@ document.addEventListener('keyup', (e) => {
     // Reset combo keys
     if (e.code === 'KeyG' || e.code === 'KeyH' || e.code === 'KeyJ') {
         comboKeys[e.code] = false;
+    }
+    
+    // Reset B+N+M combo keys
+    if (e.code === 'KeyB' || e.code === 'KeyN' || e.code === 'KeyM') {
+        comboKeysBNM[e.code] = false;
     }
 });
 

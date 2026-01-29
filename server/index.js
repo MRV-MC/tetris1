@@ -200,26 +200,46 @@ io.on('connection', (socket) => {
     console.log(`Speed boost attack sent in room: ${roomId}`);
   });
 
-  // Player game over
+  // Send piece change attack to opponent
+  socket.on('changePieceAttack', () => {
+    const roomId = playerRooms.get(socket.id);
+    const room = rooms.get(roomId);
+    
+    if (!room || room.status !== 'playing') return;
+    
+    // Send piece change to opponent
+    socket.to(roomId).emit('receivePieceChange');
+    console.log(`Piece change attack sent in room: ${roomId}`);
+  });
+
+  // Player game over - restart only the losing player
   socket.on('gameOver', () => {
     const roomId = playerRooms.get(socket.id);
     const room = rooms.get(roomId);
     
-    if (!room) return;
+    if (!room || room.status !== 'playing') return;
     
-    const opponent = room.getOpponent(socket.id);
     const player = room.getPlayer(socket.id);
     
-    room.status = 'finished';
+    // Reset player state but keep game running
+    if (player) {
+      player.board = null;
+      player.score = 0;
+      player.lines = 0;
+      player.level = 1;
+      player.currentPiece = null;
+    }
     
-    io.to(roomId).emit('gameEnded', {
-      winner: opponent ? opponent.name : null,
-      loser: player ? player.name : null,
-      hostScore: room.host?.score || 0,
-      guestScore: room.guest?.score || 0
+    // Send restart signal only to the losing player
+    socket.emit('playerRestart', { 
+      seed: Date.now(),
+      opponentScore: room.getOpponent(socket.id)?.score || 0
     });
     
-    console.log(`Game ended in room: ${roomId}`);
+    // Notify opponent that player restarted
+    socket.to(roomId).emit('opponentRestarted');
+    
+    console.log(`Player restarted in room: ${roomId}`);
   });
 
   // Restart game request
