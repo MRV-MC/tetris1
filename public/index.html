@@ -37,6 +37,74 @@
                     <p class="no-rooms">No rooms available</p>
                 </div>
             </div>
+            
+            <div class="menu-actions">
+                <button id="stats-btn" class="btn btn-secondary">Statistics</button>
+                <button id="settings-btn" class="btn btn-secondary">Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Achievements Screen -->
+    <div id="achievements-screen" class="screen">
+        <div class="container">
+            <h2>Achievements</h2>
+            <div class="achievements-list" id="achievements-list">
+                <!-- Achievements will be populated here -->
+            </div>
+            <div class="modal-actions">
+                <button id="close-achievements-btn" class="btn btn-primary">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Screen -->
+    <div id="settings-screen" class="screen">
+        <div class="container">
+            <h2>Settings</h2>
+            <div class="settings-form">
+                <div class="setting-group">
+                    <label for="sound-volume">Sound Volume</label>
+                    <input type="range" id="sound-volume" min="0" max="100" value="100">
+                    <span id="sound-volume-value">100%</span>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="block-size">Block Size</label>
+                    <select id="block-size">
+                        <option value="small">Small</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="large">Large</option>
+                    </select>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="theme">Theme</label>
+                    <select id="theme">
+                        <option value="classic" selected>Classic</option>
+                        <option value="neon">Neon</option>
+                        <option value="retro">Retro</option>
+                    </select>
+                </div>
+                
+                <div class="setting-group">
+                    <label>
+                        <input type="checkbox" id="show-ghost" checked>
+                        Show Ghost Piece
+                    </label>
+                </div>
+                
+                <div class="setting-group">
+                    <label for="das-speed">DAS Speed (ms)</label>
+                    <input type="range" id="das-speed" min="50" max="200" value="100">
+                    <span id="das-speed-value">100ms</span>
+                </div>
+                
+                <div class="modal-actions">
+                    <button id="save-settings-btn" class="btn btn-primary">Save</button>
+                    <button id="cancel-settings-btn" class="btn btn-secondary">Cancel</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -90,6 +158,13 @@
                         <span id="player-level" class="value">1</span>
                     </div>
                 </div>
+                <div id="combo-indicator" class="combo-indicator hidden">
+                    <span id="combo-text">COMBO x<span id="combo-count">1</span></span>
+                </div>
+                <div class="hold-piece">
+                    <span class="label">Hold</span>
+                    <canvas id="player-hold" width="120" height="120"></canvas>
+                </div>
                 <canvas id="player-board" width="300" height="600"></canvas>
                 <div class="next-piece">
                     <span class="label">Next</span>
@@ -125,7 +200,7 @@
         </div>
 
         <div class="controls-hint">
-            <p><kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd> Move | <kbd>↑</kbd> or <kbd>W</kbd> Rotate | <kbd>↓</kbd> or <kbd>S</kbd> Soft Drop | <kbd>Space</kbd> Hard Drop</p>
+            <p><kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd> Move | <kbd>↑</kbd> or <kbd>W</kbd> Rotate | <kbd>↓</kbd> or <kbd>S</kbd> Soft Drop | <kbd>Space</kbd> Hard Drop | <kbd>C</kbd> Hold</p>
         </div>
     </div>
 
@@ -150,11 +225,77 @@
         </div>
     </div>
 
+    <!-- Statistics Modal -->
+    <div id="stats-modal" class="modal hidden">
+        <div class="modal-content stats-content">
+            <h2>Game Statistics</h2>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <span class="stat-label">LPS</span>
+                    <span id="stat-lps" class="stat-value">0.00</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">PPM</span>
+                    <span id="stat-ppm" class="stat-value">0.0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">APM</span>
+                    <span id="stat-apm" class="stat-value">0.0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Max Combo</span>
+                    <span id="stat-combo" class="stat-value">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Pieces</span>
+                    <span id="stat-pieces" class="stat-value">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Time</span>
+                    <span id="stat-time" class="stat-value">0s</span>
+                </div>
+            </div>
+            <h3 style="margin-top: 30px; margin-bottom: 15px;">All-Time Best</h3>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <span class="stat-label">Best Score</span>
+                    <span id="stat-best-score" class="stat-value">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Best LPS</span>
+                    <span id="stat-best-lps" class="stat-value">0.00</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Best PPM</span>
+                    <span id="stat-best-ppm" class="stat-value">0.0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Best APM</span>
+                    <span id="stat-best-apm" class="stat-value">0.0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Best Combo</span>
+                    <span id="stat-best-combo" class="stat-value">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Total Games</span>
+                    <span id="stat-total-games" class="stat-value">0</span>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="close-stats-btn" class="btn btn-primary">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Connection Status -->
     <div id="connection-status" class="connection-status">
         <span class="status-dot"></span>
         <span class="status-text">Connecting...</span>
     </div>
+
+    <!-- Notifications -->
+    <div id="notifications-container" class="notifications-container"></div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="game.js"></script>

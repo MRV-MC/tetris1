@@ -24,14 +24,51 @@ const playerRooms = new Map();
 class GameRoom {
   constructor(id, hostId, hostName) {
     this.id = id;
-    this.host = { id: hostId, name: hostName, ready: false, board: null, score: 0, lines: 0, level: 1 };
+    this.host = { id: hostId, name: hostName, ready: false, board: null, score: 0, lines: 0, level: 1, rating: 1000 };
     this.guest = null;
     this.status = 'waiting'; // waiting, playing, finished
     this.createdAt = Date.now();
   }
 
   addGuest(guestId, guestName) {
-    this.guest = { id: guestId, name: guestName, ready: false, board: null, score: 0, lines: 0, level: 1 };
+    this.guest = { id: guestId, name: guestName, ready: false, board: null, score: 0, lines: 0, level: 1, rating: 1000 };
+  }
+  
+  calculateRatingChange(winnerId) {
+    const winner = this.getPlayer(winnerId);
+    const loser = this.getOpponent(winnerId);
+    
+    if (!winner || !loser) return;
+    
+    const winnerRating = winner.rating || 1000;
+    const loserRating = loser.rating || 1000;
+    
+    // Expected score (probability of winning)
+    const expectedWinner = 1 / (1 + Math.pow(10, (loserRating - winnerRating) / 400));
+    const expectedLoser = 1 - expectedWinner;
+    
+    // K-factor: 32 for new players (< 30 games), 16 for experienced
+    const kFactor = 32; // Simplified - could track games played
+    
+    // Calculate new ratings
+    const winnerChange = Math.round(kFactor * (1 - expectedWinner));
+    const loserChange = Math.round(kFactor * (0 - expectedLoser));
+    
+    winner.rating = Math.max(0, winnerRating + winnerChange);
+    loser.rating = Math.max(0, loserRating + loserChange);
+    
+    return {
+      winner: { rating: winner.rating, change: winnerChange },
+      loser: { rating: loser.rating, change: loserChange }
+    };
+  }
+  
+  getRank(rating) {
+    if (rating < 800) return { name: 'Bronze', color: '#cd7f32' };
+    if (rating < 1200) return { name: 'Silver', color: '#c0c0c0' };
+    if (rating < 1600) return { name: 'Gold', color: '#ffd700' };
+    if (rating < 2000) return { name: 'Platinum', color: '#e5e4e2' };
+    return { name: 'Diamond', color: '#b9f2ff' };
   }
 
   removePlayer(playerId) {
@@ -71,8 +108,8 @@ class GameRoom {
   toJSON() {
     return {
       id: this.id,
-      host: this.host ? { name: this.host.name, ready: this.host.ready } : null,
-      guest: this.guest ? { name: this.guest.name, ready: this.guest.ready } : null,
+      host: this.host ? { name: this.host.name, ready: this.host.ready, rating: this.host.rating } : null,
+      guest: this.guest ? { name: this.guest.name, ready: this.guest.ready, rating: this.guest.rating } : null,
       status: this.status,
       playerCount: (this.host ? 1 : 0) + (this.guest ? 1 : 0)
     };
@@ -165,13 +202,15 @@ io.on('connection', (socket) => {
       player.currentY = data.currentY;
       player.currentType = data.currentType;
       
-      // Send update to opponent
+      // Send update to opponent (support both delta and full board)
       socket.to(roomId).emit('opponentUpdate', {
         board: data.board,
+        boardDelta: data.boardDelta,
         score: data.score,
         lines: data.lines,
         level: data.level,
         nextPiece: data.nextPiece,
+        holdPiece: data.holdPiece,
         currentPiece: data.currentPiece,
         currentX: data.currentX,
         currentY: data.currentY,
@@ -220,6 +259,19 @@ io.on('connection', (socket) => {
     if (!room || room.status !== 'playing') return;
     
     const player = room.getPlayer(socket.id);
+    const opponent = room.getOpponent(socket.id);
+    
+    // Calculate rating change (opponent wins by default when player loses)
+    if (opponent) {
+      const ratingChange = room.calculateRatingChange(opponent.id);
+      if (ratingChange) {
+        // Notify both players about rating change
+        io.to(roomId).emit('ratingUpdate', {
+          winner: { id: opponent.id, rating: ratingChange.winner.rating, change: ratingChange.winner.change },
+          loser: { id: socket.id, rating: ratingChange.loser.rating, change: ratingChange.loser.change }
+        });
+      }
+    }
     
     // Reset player state but keep game running
     if (player) {
@@ -233,7 +285,7 @@ io.on('connection', (socket) => {
     // Send restart signal only to the losing player
     socket.emit('playerRestart', { 
       seed: Date.now(),
-      opponentScore: room.getOpponent(socket.id)?.score || 0
+      opponentScore: opponent?.score || 0
     });
     
     // Notify opponent that player restarted

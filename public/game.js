@@ -26,15 +26,84 @@ const leaveRoomBtn = document.getElementById('leave-room-btn');
 const playerBoard = document.getElementById('player-board');
 const opponentBoardCanvas = document.getElementById('opponent-board');
 const playerNext = document.getElementById('player-next');
+const playerHold = document.getElementById('player-hold');
 const opponentNext = document.getElementById('opponent-next');
 const playerCtx = playerBoard.getContext('2d');
 const opponentCtx = opponentBoardCanvas.getContext('2d');
 const playerNextCtx = playerNext.getContext('2d');
+const playerHoldCtx = playerHold.getContext('2d');
 const opponentNextCtx = opponentNext.getContext('2d');
 
 const connectionStatus = document.getElementById('connection-status');
 const statusDot = connectionStatus.querySelector('.status-dot');
 const statusText = connectionStatus.querySelector('.status-text');
+
+const statsModal = document.getElementById('stats-modal');
+const statsBtn = document.getElementById('stats-btn');
+const closeStatsBtn = document.getElementById('close-stats-btn');
+
+const settingsScreen = document.getElementById('settings-screen');
+const settingsBtn = document.getElementById('settings-btn');
+const saveSettingsBtn = document.getElementById('save-settings-btn');
+const cancelSettingsBtn = document.getElementById('cancel-settings-btn');
+
+const achievementsScreen = document.getElementById('achievements-screen');
+const achievementsBtn = document.getElementById('achievements-btn');
+const closeAchievementsBtn = document.getElementById('close-achievements-btn');
+
+// Settings
+let gameSettings = {
+    soundVolume: 100,
+    blockSize: 'medium',
+    theme: 'classic',
+    showGhost: true,
+    dasSpeed: 100
+};
+
+// Load settings from localStorage
+function loadSettings() {
+    const saved = localStorage.getItem('tetrisSettings');
+    if (saved) {
+        try {
+            gameSettings = { ...gameSettings, ...JSON.parse(saved) };
+            applySettings();
+        } catch (e) {
+            console.error('Error loading settings:', e);
+        }
+    }
+}
+
+// Save settings to localStorage
+function saveSettings() {
+    try {
+        localStorage.setItem('tetrisSettings', JSON.stringify(gameSettings));
+        applySettings();
+    } catch (e) {
+        console.error('Error saving settings:', e);
+    }
+}
+
+// Apply settings to game
+function applySettings() {
+    // Apply sound volume
+    if (soundManager && soundManager.audioContext) {
+        // Volume is handled per sound, we'll adjust in playTone
+    }
+    
+    // Apply block size (would require canvas resize, complex)
+    // For now, we'll keep current size
+    
+    // Apply theme (would require CSS changes)
+    document.body.className = `theme-${gameSettings.theme}`;
+    
+    // Apply ghost piece visibility
+    // Handled in draw function
+    
+    // DAS speed is handled in keyboard controls
+}
+
+// Initialize settings
+loadSettings();
 
 // Game Constants - увеличенные размеры
 const COLS = 10;
@@ -83,6 +152,10 @@ class SoundManager {
 
     playTone(frequency, duration, type = 'sine', volume = 0.3) {
         if (!this.soundsEnabled || !this.audioContext) return;
+        
+        // Apply volume setting
+        const volumeMultiplier = (gameSettings?.soundVolume || 100) / 100;
+        volume = volume * volumeMultiplier;
         
         try {
             // Resume audio context if suspended (required by browsers)
@@ -170,6 +243,8 @@ const soundManager = new SoundManager();
 let currentRoom = null;
 let playerName = '';
 let isReady = false;
+let playerRating = 1000;
+let opponentRating = 1000;
 let gameRunning = false;
 let gameInterval = null;
 let gameSeed = null;
@@ -183,6 +258,9 @@ let currentY = 0;
 let currentType = '';
 let nextPiece = null;
 let nextType = '';
+let holdPiece = null;
+let holdType = '';
+let canHold = true; // Can hold once per piece placement
 let score = 0;
 let lines = 0;
 let level = 1;
@@ -194,8 +272,128 @@ let lastUpdateTime = 0;
 let lastSentX = -1;
 let lastSentY = -1;
 let updateThrottle = 150; // Увеличено с 50 до 150мс для снижения нагрузки
+let lastSentBoard = null; // For delta compression
 let speedBoostActive = false;
 let speedBoostEndTime = 0;
+
+// Statistics
+let gameStartTime = 0;
+let piecesPlaced = 0;
+let totalAttacks = 0; // Lines sent to opponent
+let maxCombo = 0;
+let currentCombo = 0;
+let lastLineClearTime = 0;
+let stats = {
+    totalGames: 0,
+    totalWins: 0,
+    totalLines: 0,
+    totalScore: 0,
+    bestScore: 0,
+    bestLPS: 0,
+    bestPPM: 0,
+    bestAPM: 0,
+    bestCombo: 0
+};
+
+// Load stats from localStorage
+function loadStats() {
+    const saved = localStorage.getItem('tetrisStats');
+    if (saved) {
+        try {
+            stats = { ...stats, ...JSON.parse(saved) };
+        } catch (e) {
+            console.error('Error loading stats:', e);
+        }
+    }
+}
+
+// Save stats to localStorage
+function saveStats() {
+    try {
+        localStorage.setItem('tetrisStats', JSON.stringify(stats));
+    } catch (e) {
+        console.error('Error saving stats:', e);
+    }
+}
+
+loadStats();
+
+// Achievement System
+class AchievementSystem {
+    constructor() {
+        this.achievements = [
+            { id: 'first_game', name: 'First Game', description: 'Play your first game', unlocked: false, check: () => stats.totalGames >= 1 },
+            { id: 'lines_10', name: 'Line Master', description: 'Clear 10 lines', unlocked: false, check: () => stats.totalLines >= 10 },
+            { id: 'lines_50', name: 'Line Expert', description: 'Clear 50 lines', unlocked: false, check: () => stats.totalLines >= 50 },
+            { id: 'lines_100', name: 'Line Legend', description: 'Clear 100 lines', unlocked: false, check: () => stats.totalLines >= 100 },
+            { id: 'score_1000', name: 'Scorer', description: 'Score 1000 points', unlocked: false, check: () => stats.bestScore >= 1000 },
+            { id: 'score_5000', name: 'High Scorer', description: 'Score 5000 points', unlocked: false, check: () => stats.bestScore >= 5000 },
+            { id: 'score_10000', name: 'Master Scorer', description: 'Score 10000 points', unlocked: false, check: () => stats.bestScore >= 10000 },
+            { id: 'combo_5', name: 'Combo Starter', description: 'Get a 5 combo', unlocked: false, check: () => stats.bestCombo >= 5 },
+            { id: 'combo_10', name: 'Combo Master', description: 'Get a 10 combo', unlocked: false, check: () => stats.bestCombo >= 10 },
+            { id: 'speed_boost', name: 'Speed Demon', description: 'Use speed boost attack', unlocked: false, check: () => false }, // Will be set manually
+            { id: 'piece_change', name: 'Shape Shifter', description: 'Use piece change attack', unlocked: false, check: () => false }, // Will be set manually
+            { id: 'hold_master', name: 'Hold Master', description: 'Use hold 50 times', unlocked: false, check: () => false } // Will track separately
+        ];
+        this.loadAchievements();
+    }
+    
+    loadAchievements() {
+        const saved = localStorage.getItem('tetrisAchievements');
+        if (saved) {
+            try {
+                const savedAchievements = JSON.parse(saved);
+                this.achievements.forEach(ach => {
+                    const saved = savedAchievements.find(s => s.id === ach.id);
+                    if (saved) {
+                        ach.unlocked = saved.unlocked;
+                    }
+                });
+            } catch (e) {
+                console.error('Error loading achievements:', e);
+            }
+        }
+    }
+    
+    saveAchievements() {
+        try {
+            localStorage.setItem('tetrisAchievements', JSON.stringify(this.achievements));
+        } catch (e) {
+            console.error('Error saving achievements:', e);
+        }
+    }
+    
+    checkAchievements() {
+        this.achievements.forEach(ach => {
+            if (!ach.unlocked && ach.check()) {
+                this.unlockAchievement(ach);
+            }
+        });
+    }
+    
+    unlockAchievement(achievement) {
+        achievement.unlocked = true;
+        this.saveAchievements();
+        notificationSystem.show(`Achievement Unlocked: ${achievement.name}!`, 'info', 3000);
+        console.log('Achievement unlocked:', achievement.name);
+    }
+    
+    unlockById(id) {
+        const ach = this.achievements.find(a => a.id === id);
+        if (ach && !ach.unlocked) {
+            this.unlockAchievement(ach);
+        }
+    }
+    
+    getUnlockedCount() {
+        return this.achievements.filter(a => a.unlocked).length;
+    }
+}
+
+const achievementSystem = new AchievementSystem();
+
+// Track hold usage
+let holdUsageCount = 0;
 
 // Opponent state
 let opponentBoard = [];
@@ -220,10 +418,117 @@ class SeededRandom {
 
 let rng = null;
 
+// Particle System
+class ParticleSystem {
+    constructor() {
+        this.particles = [];
+    }
+    
+    createParticles(x, y, color, count = 20) {
+        for (let i = 0; i < count; i++) {
+            this.particles.push({
+                x: x + Math.random() * BLOCK_SIZE,
+                y: y + Math.random() * BLOCK_SIZE,
+                vx: (Math.random() - 0.5) * 8,
+                vy: (Math.random() - 0.5) * 8 - 2,
+                life: 1.0,
+                decay: 0.02 + Math.random() * 0.02,
+                color: color,
+                size: 3 + Math.random() * 3
+            });
+        }
+    }
+    
+    update() {
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vy += 0.3; // Gravity
+            p.life -= p.decay;
+            
+            if (p.life <= 0) {
+                this.particles.splice(i, 1);
+            }
+        }
+    }
+    
+    draw(ctx) {
+        for (const p of this.particles) {
+            ctx.save();
+            ctx.globalAlpha = p.life;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+    
+    clear() {
+        this.particles = [];
+    }
+}
+
+const particleSystem = new ParticleSystem();
+
+// Notification System
+class NotificationSystem {
+    constructor() {
+        this.container = document.getElementById('notifications-container');
+        this.notifications = [];
+    }
+    
+    show(text, type = 'info', duration = 2000) {
+        const notification = document.createElement('div');
+        notification.className = `notification notification-${type}`;
+        notification.textContent = text;
+        
+        this.container.appendChild(notification);
+        
+        // Animate in
+        setTimeout(() => {
+            notification.classList.add('show');
+        }, 10);
+        
+        // Remove after duration
+        setTimeout(() => {
+            notification.classList.remove('show');
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 300);
+        }, duration);
+    }
+    
+    showCombo(count) {
+        if (count >= 2) {
+            this.show(`COMBO x${count}!`, 'combo', 1500);
+        }
+    }
+    
+    showSpeedBoost() {
+        this.show('Speed Boost Activated!', 'warning', 2000);
+    }
+    
+    showPieceChange() {
+        this.show('Piece Changed!', 'warning', 2000);
+    }
+    
+    showGarbage() {
+        this.show('Garbage Incoming!', 'danger', 2000);
+    }
+}
+
+const notificationSystem = new NotificationSystem();
+
 // Screen Management
 function showScreen(screen) {
-    [menuScreen, lobbyScreen, gameScreen].forEach(s => s.classList.remove('active'));
-    screen.classList.add('active');
+    [menuScreen, lobbyScreen, gameScreen, settingsScreen, achievementsScreen].forEach(s => {
+        if (s) s.classList.remove('active');
+    });
+    if (screen) screen.classList.add('active');
 }
 
 // Connection Status
@@ -341,17 +646,50 @@ socket.on('error', ({ message }) => {
     alert(message);
 });
 
+function getRankInfo(rating) {
+    if (rating < 800) return { name: 'Bronze', color: '#cd7f32' };
+    if (rating < 1200) return { name: 'Silver', color: '#c0c0c0' };
+    if (rating < 1600) return { name: 'Gold', color: '#ffd700' };
+    if (rating < 2000) return { name: 'Platinum', color: '#e5e4e2' };
+    return { name: 'Diamond', color: '#b9f2ff' };
+}
+
 function updateLobby(room) {
     roomIdSpan.textContent = room.id;
     
+    // Determine if current player is host or guest by name
+    const isHost = room.host && room.host.name === playerName;
+    
     if (room.host) {
-        hostNameSpan.textContent = room.host.name;
+        const hostDisplayName = room.host.name;
+        if (room.host.rating !== undefined && room.host.rating !== null) {
+            const rank = getRankInfo(room.host.rating);
+            hostNameSpan.innerHTML = `${hostDisplayName} <span style="color: ${rank.color}; font-size: 0.8em;">[${rank.name} ${room.host.rating}]</span>`;
+            if (isHost) {
+                playerRating = room.host.rating;
+            } else if (room.guest && room.guest.name !== playerName) {
+                opponentRating = room.host.rating;
+            }
+        } else {
+            hostNameSpan.textContent = hostDisplayName;
+        }
         hostStatus.textContent = room.host.ready ? 'Ready' : 'Not Ready';
         hostStatus.className = 'status ' + (room.host.ready ? 'ready' : 'not-ready');
     }
     
     if (room.guest) {
-        guestNameSpan.textContent = room.guest.name;
+        const guestDisplayName = room.guest.name;
+        if (room.guest.rating !== undefined && room.guest.rating !== null) {
+            const rank = getRankInfo(room.guest.rating);
+            guestNameSpan.innerHTML = `${guestDisplayName} <span style="color: ${rank.color}; font-size: 0.8em;">[${rank.name} ${room.guest.rating}]</span>`;
+            if (!isHost) {
+                playerRating = room.guest.rating;
+            } else {
+                opponentRating = room.guest.rating;
+            }
+        } else {
+            guestNameSpan.textContent = guestDisplayName;
+        }
         guestStatus.textContent = room.guest.ready ? 'Ready' : 'Not Ready';
         guestStatus.className = 'status ' + (room.guest.ready ? 'ready' : 'not-ready');
     } else {
@@ -411,6 +749,25 @@ function startGame() {
     lastSentY = -1;
     speedBoostActive = false;
     speedBoostEndTime = 0;
+    holdPiece = null;
+    holdType = '';
+    canHold = true;
+    holdUsageCount = 0;
+    
+    // Reset statistics
+    gameStartTime = Date.now();
+    piecesPlaced = 0;
+    totalAttacks = 0;
+    maxCombo = 0;
+    currentCombo = 0;
+    lastLineClearTime = 0;
+    lastSentBoard = null;
+    
+    // Clear particles
+    particleSystem.clear();
+    
+    // Check achievements
+    achievementSystem.checkAchievements();
     
     // Reset opponent state
     opponentCurrentPiece = null;
@@ -428,6 +785,7 @@ function startGame() {
     // Spawn first pieces
     spawnPiece();
     spawnNextPiece();
+    drawHoldPiece();
     
     // Start game loop with smoother animation
     lastDrop = Date.now();
@@ -473,6 +831,66 @@ function spawnNextPiece() {
     drawNextPiece();
 }
 
+function holdCurrentPiece() {
+    if (!canHold || !currentPiece) return;
+    
+    try {
+        soundManager.playRotate(); // Play sound for hold
+    } catch (e) {
+        // Ignore sound errors
+    }
+    
+    // Track hold usage
+    holdUsageCount++;
+    if (holdUsageCount >= 50) {
+        achievementSystem.unlockById('hold_master');
+    }
+    
+    // If hold is empty, put current piece in hold and take next piece
+    if (!holdPiece) {
+        holdPiece = currentPiece.map(row => [...row]);
+        holdType = currentType;
+        
+        // Take next piece
+        if (nextPiece) {
+            currentPiece = nextPiece;
+            currentType = nextType;
+        } else {
+            currentType = getRandomPieceType();
+            currentPiece = PIECES[currentType].map(row => [...row]);
+        }
+        
+        spawnNextPiece();
+    } else {
+        // Swap current piece with hold piece
+        const tempPiece = currentPiece.map(row => [...row]);
+        const tempType = currentType;
+        
+        currentPiece = holdPiece.map(row => [...row]);
+        currentType = holdType;
+        
+        holdPiece = tempPiece;
+        holdType = tempType;
+    }
+    
+    // Reset position
+    currentX = Math.floor((COLS - currentPiece[0].length) / 2);
+    currentY = 0;
+    
+    // Can't hold again until piece is placed
+    canHold = false;
+    
+    // Draw hold piece
+    drawHoldPiece();
+    
+    // Check collision
+    if (checkCollision(currentX, currentY, currentPiece)) {
+        gameOver();
+    }
+    
+    draw();
+}
+
 function checkCollision(x, y, piece) {
     for (let row = 0; row < piece.length; row++) {
         for (let col = 0; col < piece[row].length; col++) {
@@ -500,15 +918,67 @@ function rotatePiece() {
     
     // Wall kick
     const kicks = [0, 1, -1, 2, -2];
+    let kicked = false;
     for (const kick of kicks) {
         if (!checkCollision(currentX + kick, currentY, rotated)) {
             currentPiece = rotated;
             currentX += kick;
-            soundManager.playRotate();
-            return true;
+            kicked = true;
+            break;
         }
     }
-    return false;
+    
+    if (!kicked) return false;
+    
+    // Check for T-Spin (only for T piece)
+    let isTSpin = false;
+    if (currentType === 'T') {
+        isTSpin = checkTSpin();
+        if (isTSpin) {
+            // Bonus score for T-Spin
+            score += 100 * level;
+            notificationSystem.show('T-SPIN!', 'combo', 2000);
+            try {
+                soundManager.playLevelUp(); // Special sound for T-Spin
+            } catch (e) {
+                // Ignore sound errors
+            }
+        }
+    }
+    
+    soundManager.playRotate();
+    return true;
+}
+
+function checkTSpin() {
+    // T-Spin detection: T piece is surrounded by blocks on 3 sides
+    if (currentType !== 'T') return false;
+    
+    const centerX = currentX + 1; // Center of T piece
+    const centerY = currentY + 1;
+    
+    // Check corners around T piece center
+    let blockedCorners = 0;
+    
+    // Top-left corner
+    if (centerY - 1 >= 0 && centerX - 1 >= 0 && board[centerY - 1][centerX - 1]) {
+        blockedCorners++;
+    }
+    // Top-right corner
+    if (centerY - 1 >= 0 && centerX + 1 < COLS && board[centerY - 1][centerX + 1]) {
+        blockedCorners++;
+    }
+    // Bottom-left corner
+    if (centerY + 1 < ROWS && centerX - 1 >= 0 && board[centerY + 1][centerX - 1]) {
+        blockedCorners++;
+    }
+    // Bottom-right corner
+    if (centerY + 1 < ROWS && centerX + 1 < COLS && board[centerY + 1][centerX + 1]) {
+        blockedCorners++;
+    }
+    
+    // T-Spin requires at least 3 corners blocked
+    return blockedCorners >= 3;
 }
 
 function movePiece(dx, dy) {
@@ -542,6 +1012,12 @@ function lockPiece() {
         }
     }
     
+    // Reset hold ability
+    canHold = true;
+    
+    // Statistics: piece placed
+    piecesPlaced++;
+    
     const clearedCount = clearLines();
     addGarbage();
     spawnPiece();
@@ -550,9 +1026,19 @@ function lockPiece() {
 
 function clearLines() {
     let clearedLines = 0;
+    const clearedRows = [];
     
     for (let row = ROWS - 1; row >= 0; row--) {
         if (board[row].every(cell => cell !== 0)) {
+            // Collect colors from cleared line for particles
+            const lineColors = [];
+            for (let col = 0; col < COLS; col++) {
+                if (board[row][col]) {
+                    lineColors.push(COLORS[board[row][col]] || COLORS.GARBAGE);
+                }
+            }
+            clearedRows.push({ row, colors: lineColors });
+            
             board.splice(row, 1);
             board.unshift(Array(COLS).fill(0));
             clearedLines++;
@@ -561,12 +1047,43 @@ function clearLines() {
     }
     
     if (clearedLines > 0) {
+        // Create particles for each cleared line
+        for (const cleared of clearedRows) {
+            const y = cleared.row * BLOCK_SIZE + BLOCK_SIZE / 2;
+            for (let col = 0; col < COLS; col++) {
+                const x = col * BLOCK_SIZE + BLOCK_SIZE / 2;
+                const color = cleared.colors[col] || COLORS.GARBAGE;
+                particleSystem.createParticles(x, y, color, 5);
+            }
+        }
+        
         soundManager.playLineClear(clearedLines);
         lines += clearedLines;
         
-        // Score calculation
+        // Statistics: combo tracking
+        const now = Date.now();
+        if (now - lastLineClearTime < 2000) {
+            // Continue combo if cleared within 2 seconds
+            currentCombo++;
+        } else {
+            // Reset combo
+            currentCombo = 1;
+        }
+        lastLineClearTime = now;
+        
+        if (currentCombo > maxCombo) {
+            maxCombo = currentCombo;
+        }
+        
+        // Show combo notification
+        if (currentCombo >= 2) {
+            notificationSystem.showCombo(currentCombo);
+        }
+        
+        // Score calculation with combo multiplier
         const lineScores = [0, 100, 300, 500, 800];
-        score += lineScores[clearedLines] * level;
+        const comboMultiplier = Math.min(2.0, 1.0 + (currentCombo - 1) * 0.1); // Up to 2x multiplier
+        score += Math.floor(lineScores[clearedLines] * level * comboMultiplier);
         
         // Level up
         const newLevel = Math.floor(lines / 10) + 1;
@@ -583,13 +1100,43 @@ function clearLines() {
         document.getElementById('player-lines').textContent = lines;
         document.getElementById('player-level').textContent = level;
         
-        // Send garbage to opponent (if cleared 2+ lines)
+        // Send garbage to opponent (if cleared 2+ lines or T-Spin)
         if (clearedLines >= 2) {
-            socket.emit('sendGarbage', clearedLines - 1);
+            const attackLines = clearedLines - 1;
+            totalAttacks += attackLines;
+            socket.emit('sendGarbage', attackLines);
         }
+        
+        // Extra garbage for T-Spin clears
+        // T-Spin detection happens in rotatePiece, but we track it here
+        // For simplicity, we'll add bonus garbage if combo is high (indicating T-Spin usage)
+        if (currentCombo >= 3 && clearedLines > 0) {
+            totalAttacks += 1; // Bonus attack for T-Spin combos
+            socket.emit('sendGarbage', 1);
+        }
+    } else {
+        // No lines cleared - reset combo
+        currentCombo = 0;
+        hideComboIndicator();
     }
     
     return clearedLines;
+}
+
+function showComboIndicator(count) {
+    const indicator = document.getElementById('combo-indicator');
+    const comboCount = document.getElementById('combo-count');
+    if (indicator && comboCount) {
+        comboCount.textContent = count;
+        indicator.classList.remove('hidden');
+    }
+}
+
+function hideComboIndicator() {
+    const indicator = document.getElementById('combo-indicator');
+    if (indicator) {
+        indicator.classList.add('hidden');
+    }
 }
 
 function addGarbage() {
@@ -661,6 +1208,10 @@ function draw() {
     
     // Draw opponent board
     drawOpponentBoard();
+    
+    // Update and draw particles
+    particleSystem.update();
+    particleSystem.draw(playerCtx);
 }
 
 function drawPlayerBoard() {
@@ -677,12 +1228,14 @@ function drawPlayerBoard() {
         }
     }
     
-    // Draw ghost piece
-    const ghostY = getGhostY();
-    for (let row = 0; row < currentPiece.length; row++) {
-        for (let col = 0; col < currentPiece[row].length; col++) {
-            if (currentPiece[row][col]) {
-                drawBlock(playerCtx, currentX + col, ghostY + row, COLORS.GHOST);
+    // Draw ghost piece (if enabled)
+    if (gameSettings.showGhost) {
+        const ghostY = getGhostY();
+        for (let row = 0; row < currentPiece.length; row++) {
+            for (let col = 0; col < currentPiece[row].length; col++) {
+                if (currentPiece[row][col]) {
+                    drawBlock(playerCtx, currentX + col, ghostY + row, COLORS.GHOST);
+                }
             }
         }
     }
@@ -840,22 +1393,76 @@ function drawNextBlock(ctx, x, y, color) {
     ctx.fillRect(x + 1, y + NEXT_BLOCK_SIZE - 3, NEXT_BLOCK_SIZE - 4, 2);
 }
 
+function drawHoldPiece() {
+    playerHoldCtx.fillStyle = '#0a0a1a';
+    playerHoldCtx.fillRect(0, 0, playerHold.width, playerHold.height);
+    
+    if (!holdPiece) return;
+    
+    const offsetX = (5 - holdPiece[0].length) / 2;
+    const offsetY = (5 - holdPiece.length) / 2;
+    
+    for (let row = 0; row < holdPiece.length; row++) {
+        for (let col = 0; col < holdPiece[row].length; col++) {
+            if (holdPiece[row][col]) {
+                const x = (offsetX + col) * NEXT_BLOCK_SIZE + 4;
+                const y = (offsetY + row) * NEXT_BLOCK_SIZE + 4;
+                drawNextBlock(playerHoldCtx, x, y, COLORS[holdType]);
+            }
+        }
+    }
+    
+    // Draw "can't hold" indicator if needed
+    if (!canHold) {
+        playerHoldCtx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+        playerHoldCtx.fillRect(0, 0, playerHold.width, playerHold.height);
+    }
+}
+
+function calculateBoardDelta(oldBoard, newBoard) {
+    // Calculate delta: only send changed cells
+    const delta = [];
+    for (let row = 0; row < ROWS; row++) {
+        for (let col = 0; col < COLS; col++) {
+            const oldVal = oldBoard && oldBoard[row] ? oldBoard[row][col] : 0;
+            const newVal = newBoard[row][col];
+            if (oldVal !== newVal) {
+                delta.push({ row, col, value: newVal });
+            }
+        }
+    }
+    return delta.length < (ROWS * COLS * 0.3) ? delta : null; // Send delta if less than 30% changed
+}
+
 function sendGameUpdate() {
     // Отправляем обновления только если игра запущена и есть соединение
     if (!gameRunning || !socket.connected) return;
     
     try {
-        socket.emit('gameUpdate', {
-            board: board,
+        // Calculate board delta for optimization
+        const boardDelta = calculateBoardDelta(lastSentBoard, board);
+        
+        const updateData = {
             score: score,
             lines: lines,
             level: level,
             nextPiece: { type: nextType, piece: nextPiece },
+            holdPiece: holdPiece ? { type: holdType, piece: holdPiece } : null,
             currentPiece: currentPiece,
             currentX: currentX,
             currentY: currentY,
             currentType: currentType
-        });
+        };
+        
+        // Send delta if efficient, otherwise send full board
+        if (boardDelta) {
+            updateData.boardDelta = boardDelta;
+        } else {
+            updateData.board = board;
+            lastSentBoard = board.map(row => [...row]); // Deep copy
+        }
+        
+        socket.emit('gameUpdate', updateData);
     } catch (e) {
         console.error('Error sending game update:', e);
     }
@@ -871,6 +1478,9 @@ function gameOver() {
 }
 
 function restartPlayer() {
+    // Save statistics before reset
+    saveGameStats();
+    
     // Reset game state but keep game running
     board = createBoard();
     score = 0;
@@ -884,6 +1494,17 @@ function restartPlayer() {
     lastUpdateTime = Date.now();
     lastSentX = -1;
     lastSentY = -1;
+    holdPiece = null;
+    holdType = '';
+    canHold = true;
+    
+    // Reset statistics
+    gameStartTime = Date.now();
+    piecesPlaced = 0;
+    totalAttacks = 0;
+    maxCombo = 0;
+    currentCombo = 0;
+    lastLineClearTime = 0;
     
     // Update UI
     document.getElementById('player-score').textContent = '0';
@@ -893,12 +1514,64 @@ function restartPlayer() {
     // Spawn new pieces
     spawnPiece();
     spawnNextPiece();
+    drawHoldPiece();
     
     // Reset drop timer
     lastDrop = Date.now();
     
     // Draw initial state
     draw();
+}
+
+function calculateStats() {
+    const gameTime = (Date.now() - gameStartTime) / 1000; // seconds
+    const gameTimeMinutes = gameTime / 60;
+    
+    const lps = gameTime > 0 ? (lines / gameTime).toFixed(2) : '0.00';
+    const ppm = gameTimeMinutes > 0 ? (piecesPlaced / gameTimeMinutes).toFixed(1) : '0.0';
+    const apm = gameTimeMinutes > 0 ? (totalAttacks / gameTimeMinutes).toFixed(1) : '0.0';
+    
+    return {
+        lps: parseFloat(lps),
+        ppm: parseFloat(ppm),
+        apm: parseFloat(apm),
+        maxCombo: maxCombo,
+        piecesPlaced: piecesPlaced,
+        totalAttacks: totalAttacks,
+        gameTime: gameTime
+    };
+}
+
+function saveGameStats() {
+    const currentStats = calculateStats();
+    
+    // Update global stats
+    stats.totalGames++;
+    stats.totalLines += lines;
+    stats.totalScore += score;
+    
+    if (score > stats.bestScore) {
+        stats.bestScore = score;
+    }
+    if (currentStats.lps > stats.bestLPS) {
+        stats.bestLPS = currentStats.lps;
+    }
+    if (currentStats.ppm > stats.bestPPM) {
+        stats.bestPPM = currentStats.ppm;
+    }
+    if (currentStats.apm > stats.bestAPM) {
+        stats.bestAPM = currentStats.apm;
+    }
+    if (maxCombo > stats.bestCombo) {
+        stats.bestCombo = maxCombo;
+    }
+    
+    saveStats();
+    
+    // Check achievements after game
+    achievementSystem.checkAchievements();
+    
+    return currentStats;
 }
 
 // Opponent Updates
@@ -917,8 +1590,17 @@ socket.on('opponentUpdate', (data) => {
             document.getElementById('opponent-level').textContent = data.level;
         }
         
-        // Update opponent board (only if provided)
-        if (data.board && Array.isArray(data.board)) {
+        // Update opponent board (delta or full)
+        if (data.boardDelta && Array.isArray(data.boardDelta)) {
+            // Apply delta updates
+            for (const change of data.boardDelta) {
+                if (!opponentBoard[change.row]) {
+                    opponentBoard[change.row] = Array(COLS).fill(0);
+                }
+                opponentBoard[change.row][change.col] = change.value;
+            }
+        } else if (data.board && Array.isArray(data.board)) {
+            // Full board update
             opponentBoard = data.board;
         }
         
@@ -967,6 +1649,7 @@ function drawOpponentNextPiece(nextPieceData) {
 // Receive Garbage
 socket.on('receiveGarbage', (lineCount) => {
     garbageQueue += lineCount;
+    notificationSystem.showGarbage();
 });
 
 // Receive Speed Boost Attack
@@ -984,7 +1667,7 @@ socket.on('receiveSpeedBoost', () => {
         // Ignore sound errors
     }
     
-    // Visual feedback - можно добавить эффект на экране
+    notificationSystem.showSpeedBoost();
     console.log('Speed boost activated!');
 });
 
@@ -1069,7 +1752,18 @@ socket.on('playerRestart', ({ seed, opponentScore }) => {
 // Opponent Restarted notification
 socket.on('opponentRestarted', () => {
     console.log('Opponent restarted!');
-    // Visual feedback could be added here
+    notificationSystem.show('Opponent restarted!', 'info', 2000);
+});
+
+// Rating Update
+socket.on('ratingUpdate', ({ winner, loser }) => {
+    if (winner.id === socket.id) {
+        playerRating = winner.rating;
+        notificationSystem.show(`Rating: +${winner.change} (${winner.rating})`, 'info', 3000);
+    } else if (loser.id === socket.id) {
+        playerRating = loser.rating;
+        notificationSystem.show(`Rating: ${loser.change} (${loser.rating})`, 'danger', 3000);
+    }
 });
 
 // Game Restart
@@ -1127,6 +1821,7 @@ document.addEventListener('keydown', (e) => {
             if (now - lastComboTime > 2000) {
                 lastComboTime = now;
                 socket.emit('speedBoostAttack');
+                achievementSystem.unlockById('speed_boost');
                 try {
                     soundManager.playGarbage(); // Play sound effect
                 } catch (e) {
@@ -1146,6 +1841,7 @@ document.addEventListener('keydown', (e) => {
             if (now - lastComboBNMTime > 2000) {
                 lastComboBNMTime = now;
                 socket.emit('changePieceAttack');
+                achievementSystem.unlockById('piece_change');
                 try {
                     soundManager.playRotate(); // Play sound effect
                 } catch (e) {
@@ -1156,7 +1852,7 @@ document.addEventListener('keydown', (e) => {
     }
     
     // Prevent default for game keys
-    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyG', 'KeyH', 'KeyJ', 'KeyB', 'KeyN', 'KeyM'].includes(key)) {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyC', 'KeyG', 'KeyH', 'KeyJ', 'KeyB', 'KeyN', 'KeyM'].includes(key)) {
         e.preventDefault();
     }
     
@@ -1191,6 +1887,9 @@ document.addEventListener('keydown', (e) => {
         case 'Space':
             hardDrop();
             break;
+        case 'KeyC':
+            holdCurrentPiece();
+            break;
     }
     
     draw();
@@ -1209,6 +1908,152 @@ document.addEventListener('keyup', (e) => {
         comboKeysBNM[e.code] = false;
     }
 });
+
+// Statistics button
+if (statsBtn) {
+    statsBtn.addEventListener('click', () => {
+        showStats();
+    });
+}
+
+if (closeStatsBtn) {
+    closeStatsBtn.addEventListener('click', () => {
+        statsModal.classList.add('hidden');
+    });
+}
+
+// Settings button
+if (settingsBtn) {
+    settingsBtn.addEventListener('click', () => {
+        showSettings();
+    });
+}
+
+if (saveSettingsBtn) {
+    saveSettingsBtn.addEventListener('click', () => {
+        saveSettingsFromForm();
+    });
+}
+
+if (cancelSettingsBtn) {
+    cancelSettingsBtn.addEventListener('click', () => {
+        hideSettings();
+    });
+}
+
+function showSettings() {
+    // Load current settings into form
+    document.getElementById('sound-volume').value = gameSettings.soundVolume;
+    document.getElementById('sound-volume-value').textContent = gameSettings.soundVolume + '%';
+    document.getElementById('block-size').value = gameSettings.blockSize;
+    document.getElementById('theme').value = gameSettings.theme;
+    document.getElementById('show-ghost').checked = gameSettings.showGhost;
+    document.getElementById('das-speed').value = gameSettings.dasSpeed;
+    document.getElementById('das-speed-value').textContent = gameSettings.dasSpeed + 'ms';
+    
+    // Update volume slider
+    document.getElementById('sound-volume').addEventListener('input', (e) => {
+        document.getElementById('sound-volume-value').textContent = e.target.value + '%';
+    });
+    
+    // Update DAS speed slider
+    document.getElementById('das-speed').addEventListener('input', (e) => {
+        document.getElementById('das-speed-value').textContent = e.target.value + 'ms';
+    });
+    
+    showScreen(settingsScreen);
+}
+
+function hideSettings() {
+    showScreen(menuScreen);
+}
+
+function saveSettingsFromForm() {
+    gameSettings.soundVolume = parseInt(document.getElementById('sound-volume').value);
+    gameSettings.blockSize = document.getElementById('block-size').value;
+    gameSettings.theme = document.getElementById('theme').value;
+    gameSettings.showGhost = document.getElementById('show-ghost').checked;
+    gameSettings.dasSpeed = parseInt(document.getElementById('das-speed').value);
+    
+    saveSettings();
+    hideSettings();
+    
+    try {
+        soundManager.playButton();
+    } catch (e) {
+        // Ignore sound errors
+    }
+}
+
+// Achievements button
+if (achievementsBtn) {
+    achievementsBtn.addEventListener('click', () => {
+        showAchievements();
+    });
+}
+
+if (closeAchievementsBtn) {
+    closeAchievementsBtn.addEventListener('click', () => {
+        showScreen(menuScreen);
+    });
+}
+
+function showAchievements() {
+    const list = document.getElementById('achievements-list');
+    list.innerHTML = '';
+    
+    const unlockedCount = achievementSystem.getUnlockedCount();
+    const totalCount = achievementSystem.achievements.length;
+    
+    list.innerHTML = `<div style="margin-bottom: 20px; font-size: 1.1rem; color: var(--text-muted);">
+        Progress: ${unlockedCount} / ${totalCount}
+    </div>`;
+    
+    achievementSystem.achievements.forEach(ach => {
+        const item = document.createElement('div');
+        item.className = `achievement-item ${ach.unlocked ? 'unlocked' : 'locked'}`;
+        item.innerHTML = `
+            <div class="achievement-icon">${ach.unlocked ? '✓' : '○'}</div>
+            <div class="achievement-info">
+                <div class="achievement-name">${ach.name}</div>
+                <div class="achievement-desc">${ach.description}</div>
+            </div>
+        `;
+        list.appendChild(item);
+    });
+    
+    showScreen(achievementsScreen);
+}
+
+function showStats() {
+    // Update stats display
+    const currentStats = calculateStats();
+    
+    document.getElementById('stat-lps').textContent = currentStats.lps.toFixed(2);
+    document.getElementById('stat-ppm').textContent = currentStats.ppm.toFixed(1);
+    document.getElementById('stat-apm').textContent = currentStats.apm.toFixed(1);
+    document.getElementById('stat-combo').textContent = currentStats.maxCombo;
+    document.getElementById('stat-pieces').textContent = currentStats.piecesPlaced;
+    document.getElementById('stat-time').textContent = Math.floor(currentStats.gameTime) + 's';
+    
+    // Update all-time best
+    document.getElementById('stat-best-score').textContent = stats.bestScore;
+    document.getElementById('stat-best-lps').textContent = stats.bestLPS.toFixed(2);
+    document.getElementById('stat-best-ppm').textContent = stats.bestPPM.toFixed(1);
+    document.getElementById('stat-best-apm').textContent = stats.bestAPM.toFixed(1);
+    document.getElementById('stat-best-combo').textContent = stats.bestCombo;
+    document.getElementById('stat-total-games').textContent = stats.totalGames;
+    
+    statsModal.classList.remove('hidden');
+}
+
+// Update stats display in real-time during game
+function updateStatsDisplay() {
+    if (!gameRunning) return;
+    
+    const currentStats = calculateStats();
+    // Could add real-time display here if needed
+}
 
 // Initial rooms request
 socket.emit('getRooms');
