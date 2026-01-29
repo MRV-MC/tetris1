@@ -36,11 +36,11 @@ const connectionStatus = document.getElementById('connection-status');
 const statusDot = connectionStatus.querySelector('.status-dot');
 const statusText = connectionStatus.querySelector('.status-text');
 
-// Game Constants
+// Game Constants - увеличенные размеры
 const COLS = 10;
 const ROWS = 20;
-const BLOCK_SIZE = 20;
-const NEXT_BLOCK_SIZE = 16;
+const BLOCK_SIZE = 30; // Увеличено с 20 до 30
+const NEXT_BLOCK_SIZE = 24; // Увеличено с 16 до 24
 
 const COLORS = {
     I: '#00f5ff',
@@ -50,7 +50,7 @@ const COLORS = {
     Z: '#f44336',
     J: '#2196f3',
     L: '#ff9800',
-    GHOST: 'rgba(255, 255, 255, 0.2)',
+    GHOST: 'rgba(255, 255, 255, 0.15)',
     GARBAGE: '#666666'
 };
 
@@ -63,6 +63,99 @@ const PIECES = {
     J: [[1,0,0], [1,1,1], [0,0,0]],
     L: [[0,0,1], [1,1,1], [0,0,0]]
 };
+
+// Sound System using Web Audio API
+class SoundManager {
+    constructor() {
+        this.audioContext = null;
+        this.soundsEnabled = true;
+        this.init();
+    }
+
+    init() {
+        try {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (e) {
+            console.warn('Web Audio API not supported');
+            this.soundsEnabled = false;
+        }
+    }
+
+    playTone(frequency, duration, type = 'sine', volume = 0.3) {
+        if (!this.soundsEnabled || !this.audioContext) return;
+        
+        try {
+            const oscillator = this.audioContext.createOscillator();
+            const gainNode = this.audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioContext.destination);
+            
+            oscillator.frequency.value = frequency;
+            oscillator.type = type;
+            
+            gainNode.gain.setValueAtTime(volume, this.audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + duration);
+            
+            oscillator.start(this.audioContext.currentTime);
+            oscillator.stop(this.audioContext.currentTime + duration);
+        } catch (e) {
+            // Ignore errors
+        }
+    }
+
+    playMove() {
+        this.playTone(200, 0.05, 'square', 0.2);
+    }
+
+    playRotate() {
+        this.playTone(300, 0.08, 'sine', 0.25);
+    }
+
+    playDrop() {
+        this.playTone(150, 0.1, 'sawtooth', 0.3);
+    }
+
+    playHardDrop() {
+        this.playTone(100, 0.15, 'sawtooth', 0.4);
+    }
+
+    playLineClear(count) {
+        const frequencies = [400, 500, 600, 700];
+        const freq = frequencies[Math.min(count - 1, 3)] || 400;
+        this.playTone(freq, 0.2, 'sine', 0.4);
+    }
+
+    playGameOver() {
+        // Sad descending tone
+        const notes = [400, 350, 300, 250];
+        notes.forEach((freq, i) => {
+            setTimeout(() => {
+                this.playTone(freq, 0.3, 'sine', 0.5);
+            }, i * 150);
+        });
+    }
+
+    playLevelUp() {
+        // Ascending tone
+        const notes = [300, 400, 500, 600];
+        notes.forEach((freq, i) => {
+            setTimeout(() => {
+                this.playTone(freq, 0.15, 'sine', 0.3);
+            }, i * 100);
+        });
+    }
+
+    playGarbage() {
+        this.playTone(250, 0.2, 'sawtooth', 0.35);
+    }
+
+    playButton() {
+        this.playTone(350, 0.1, 'sine', 0.2);
+    }
+}
+
+const soundManager = new SoundManager();
 
 // Game State
 let currentRoom = null;
@@ -84,9 +177,19 @@ let nextType = '';
 let score = 0;
 let lines = 0;
 let level = 1;
-let dropSpeed = 1000;
+let dropSpeed = 700; // Ускорено с 1000 до 700
 let lastDrop = 0;
 let garbageQueue = 0;
+let lastUpdateTime = 0;
+
+// Opponent state
+let opponentBoard = [];
+let opponentCurrentPiece = null;
+let opponentCurrentX = 0;
+let opponentCurrentY = 0;
+let opponentCurrentType = '';
+let opponentNextPiece = null;
+let opponentNextType = '';
 
 // Random generator with seed
 class SeededRandom {
@@ -124,17 +227,20 @@ socket.on('disconnect', () => {
 
 // Menu Events
 createRoomBtn.addEventListener('click', () => {
+    soundManager.playButton();
     playerName = playerNameInput.value.trim() || 'Player';
     socket.emit('createRoom', playerName);
 });
 
 joinRoomBtn.addEventListener('click', () => {
+    soundManager.playButton();
     joinForm.classList.toggle('hidden');
 });
 
 confirmJoinBtn.addEventListener('click', () => {
     const roomId = roomCodeInput.value.trim().toUpperCase();
     if (roomId) {
+        soundManager.playButton();
         playerName = playerNameInput.value.trim() || 'Player';
         socket.emit('joinRoom', { roomId, playerName });
     }
@@ -158,6 +264,7 @@ socket.on('roomsList', (rooms) => {
 });
 
 window.quickJoin = function(roomId) {
+    soundManager.playButton();
     playerName = playerNameInput.value.trim() || 'Player';
     socket.emit('joinRoom', { roomId, playerName });
 };
@@ -216,12 +323,14 @@ function updateLobby(room) {
 
 // Lobby Events
 readyBtn.addEventListener('click', () => {
+    soundManager.playButton();
     isReady = !isReady;
     socket.emit('playerReady');
     readyBtn.textContent = isReady ? 'Waiting...' : 'Ready';
 });
 
 leaveRoomBtn.addEventListener('click', () => {
+    soundManager.playButton();
     socket.emit('leaveRoom');
     currentRoom = null;
     isReady = false;
@@ -241,12 +350,18 @@ socket.on('gameStart', ({ seed }) => {
 function startGame() {
     // Reset game state
     board = createBoard();
+    opponentBoard = createBoard();
     score = 0;
     lines = 0;
     level = 1;
-    dropSpeed = 1000;
+    dropSpeed = 700; // Ускорено
     garbageQueue = 0;
     gameRunning = true;
+    lastUpdateTime = Date.now();
+    
+    // Reset opponent state
+    opponentCurrentPiece = null;
+    opponentNextPiece = null;
     
     // Update UI
     document.getElementById('player-score').textContent = '0';
@@ -261,10 +376,10 @@ function startGame() {
     spawnPiece();
     spawnNextPiece();
     
-    // Start game loop
+    // Start game loop with smoother animation
     lastDrop = Date.now();
     if (gameInterval) clearInterval(gameInterval);
-    gameInterval = setInterval(gameLoop, 16);
+    gameInterval = requestAnimationFrame(gameLoop);
     
     // Draw initial state
     draw();
@@ -336,6 +451,7 @@ function rotatePiece() {
         if (!checkCollision(currentX + kick, currentY, rotated)) {
             currentPiece = rotated;
             currentX += kick;
+            soundManager.playRotate();
             return true;
         }
     }
@@ -346,12 +462,14 @@ function movePiece(dx, dy) {
     if (!checkCollision(currentX + dx, currentY + dy, currentPiece)) {
         currentX += dx;
         currentY += dy;
+        if (dx !== 0) soundManager.playMove();
         return true;
     }
     return false;
 }
 
 function hardDrop() {
+    soundManager.playHardDrop();
     while (movePiece(0, 1)) {
         score += 2;
     }
@@ -359,6 +477,7 @@ function hardDrop() {
 }
 
 function lockPiece() {
+    soundManager.playDrop();
     for (let row = 0; row < currentPiece.length; row++) {
         for (let col = 0; col < currentPiece[row].length; col++) {
             if (currentPiece[row][col]) {
@@ -370,7 +489,7 @@ function lockPiece() {
         }
     }
     
-    clearLines();
+    const clearedCount = clearLines();
     addGarbage();
     spawnPiece();
     sendGameUpdate();
@@ -389,6 +508,7 @@ function clearLines() {
     }
     
     if (clearedLines > 0) {
+        soundManager.playLineClear(clearedLines);
         lines += clearedLines;
         
         // Score calculation
@@ -396,8 +516,12 @@ function clearLines() {
         score += lineScores[clearedLines] * level;
         
         // Level up
-        level = Math.floor(lines / 10) + 1;
-        dropSpeed = Math.max(100, 1000 - (level - 1) * 80);
+        const newLevel = Math.floor(lines / 10) + 1;
+        if (newLevel > level) {
+            soundManager.playLevelUp();
+        }
+        level = newLevel;
+        dropSpeed = Math.max(50, 700 - (level - 1) * 60); // Ускорено
         
         // Update UI
         document.getElementById('player-score').textContent = score;
@@ -409,10 +533,13 @@ function clearLines() {
             socket.emit('sendGarbage', clearedLines - 1);
         }
     }
+    
+    return clearedLines;
 }
 
 function addGarbage() {
     if (garbageQueue > 0) {
+        soundManager.playGarbage();
         const garbageLines = Math.min(garbageQueue, ROWS - 4);
         garbageQueue = 0;
         
@@ -437,26 +564,44 @@ function getGhostY() {
     return ghostY;
 }
 
-function gameLoop() {
+// Smooth game loop using requestAnimationFrame
+function gameLoop(timestamp) {
     if (!gameRunning) return;
     
     const now = Date.now();
-    if (now - lastDrop >= dropSpeed) {
+    const deltaTime = now - lastDrop;
+    
+    if (deltaTime >= dropSpeed) {
         if (!movePiece(0, 1)) {
             lockPiece();
         }
         lastDrop = now;
     }
     
+    // Send updates more frequently for smoother opponent view
+    if (now - lastUpdateTime >= 50) { // Каждые 50мс
+        sendGameUpdate();
+        lastUpdateTime = now;
+    }
+    
     draw();
+    gameInterval = requestAnimationFrame(gameLoop);
 }
 
 function draw() {
+    // Draw player board
+    drawPlayerBoard();
+    
+    // Draw opponent board
+    drawOpponentBoard();
+}
+
+function drawPlayerBoard() {
     // Clear canvas
     playerCtx.fillStyle = '#0a0a1a';
     playerCtx.fillRect(0, 0, playerBoard.width, playerBoard.height);
     
-    // Draw board
+    // Draw board with gradient effect
     for (let row = 0; row < ROWS; row++) {
         for (let col = 0; col < COLS; col++) {
             if (board[row][col]) {
@@ -475,7 +620,7 @@ function draw() {
         }
     }
     
-    // Draw current piece
+    // Draw current piece with smooth animation
     for (let row = 0; row < currentPiece.length; row++) {
         for (let col = 0; col < currentPiece[row].length; col++) {
             if (currentPiece[row][col]) {
@@ -485,51 +630,147 @@ function draw() {
     }
     
     // Draw grid
-    playerCtx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    drawGrid(playerCtx);
+}
+
+function drawOpponentBoard() {
+    // Clear canvas
+    opponentCtx.fillStyle = '#0a0a1a';
+    opponentCtx.fillRect(0, 0, opponentBoard.width, opponentBoard.height);
+    
+    // Draw opponent board
+    for (let row = 0; row < ROWS; row++) {
+        for (let col = 0; col < COLS; col++) {
+            if (opponentBoard[row] && opponentBoard[row][col]) {
+                drawBlock(opponentCtx, col, row, COLORS[opponentBoard[row][col]] || COLORS.GARBAGE);
+            }
+        }
+    }
+    
+    // Draw opponent ghost piece
+    if (opponentCurrentPiece) {
+        let opponentGhostY = opponentCurrentY;
+        while (!checkOpponentCollision(opponentCurrentX, opponentGhostY + 1, opponentCurrentPiece)) {
+            opponentGhostY++;
+        }
+        
+        for (let row = 0; row < opponentCurrentPiece.length; row++) {
+            for (let col = 0; col < opponentCurrentPiece[row].length; col++) {
+                if (opponentCurrentPiece[row][col]) {
+                    drawBlock(opponentCtx, opponentCurrentX + col, opponentGhostY + row, COLORS.GHOST);
+                }
+            }
+        }
+        
+        // Draw opponent current piece
+        for (let row = 0; row < opponentCurrentPiece.length; row++) {
+            for (let col = 0; col < opponentCurrentPiece[row].length; col++) {
+                if (opponentCurrentPiece[row][col]) {
+                    drawBlock(opponentCtx, opponentCurrentX + col, opponentCurrentY + row, COLORS[opponentCurrentType] || '#888');
+                }
+            }
+        }
+    }
+    
+    // Draw grid
+    drawGrid(opponentCtx);
+}
+
+function checkOpponentCollision(x, y, piece) {
+    for (let row = 0; row < piece.length; row++) {
+        for (let col = 0; col < piece[row].length; col++) {
+            if (piece[row][col]) {
+                const newX = x + col;
+                const newY = y + row;
+                
+                if (newX < 0 || newX >= COLS || newY >= ROWS) {
+                    return true;
+                }
+                
+                if (newY >= 0 && opponentBoard[newY] && opponentBoard[newY][newX]) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+function drawGrid(ctx) {
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+    ctx.lineWidth = 1;
     for (let row = 0; row <= ROWS; row++) {
-        playerCtx.beginPath();
-        playerCtx.moveTo(0, row * BLOCK_SIZE);
-        playerCtx.lineTo(COLS * BLOCK_SIZE, row * BLOCK_SIZE);
-        playerCtx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, row * BLOCK_SIZE);
+        ctx.lineTo(COLS * BLOCK_SIZE, row * BLOCK_SIZE);
+        ctx.stroke();
     }
     for (let col = 0; col <= COLS; col++) {
-        playerCtx.beginPath();
-        playerCtx.moveTo(col * BLOCK_SIZE, 0);
-        playerCtx.lineTo(col * BLOCK_SIZE, ROWS * BLOCK_SIZE);
-        playerCtx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(col * BLOCK_SIZE, 0);
+        ctx.lineTo(col * BLOCK_SIZE, ROWS * BLOCK_SIZE);
+        ctx.stroke();
     }
 }
 
 function drawBlock(ctx, x, y, color) {
+    const pixelX = x * BLOCK_SIZE;
+    const pixelY = y * BLOCK_SIZE;
+    
+    // Main block
     ctx.fillStyle = color;
-    ctx.fillRect(x * BLOCK_SIZE + 1, y * BLOCK_SIZE + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2);
+    ctx.fillRect(pixelX + 1, pixelY + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2);
+    
+    // Gradient effect
+    const gradient = ctx.createLinearGradient(pixelX, pixelY, pixelX + BLOCK_SIZE, pixelY + BLOCK_SIZE);
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 0.3)');
+    gradient.addColorStop(1, 'rgba(0, 0, 0, 0.3)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(pixelX + 1, pixelY + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2);
     
     // Highlight
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-    ctx.fillRect(x * BLOCK_SIZE + 2, y * BLOCK_SIZE + 2, BLOCK_SIZE - 6, 3);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.fillRect(pixelX + 2, pixelY + 2, BLOCK_SIZE - 6, 4);
     
     // Shadow
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-    ctx.fillRect(x * BLOCK_SIZE + 2, y * BLOCK_SIZE + BLOCK_SIZE - 5, BLOCK_SIZE - 6, 3);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.fillRect(pixelX + 2, pixelY + BLOCK_SIZE - 6, BLOCK_SIZE - 6, 4);
+    
+    // Border
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(pixelX + 1, pixelY + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2);
 }
 
 function drawNextPiece() {
     playerNextCtx.fillStyle = '#0a0a1a';
     playerNextCtx.fillRect(0, 0, playerNext.width, playerNext.height);
     
-    const offsetX = (4 - nextPiece[0].length) / 2;
-    const offsetY = (4 - nextPiece.length) / 2;
+    const offsetX = (5 - nextPiece[0].length) / 2;
+    const offsetY = (5 - nextPiece.length) / 2;
     
     for (let row = 0; row < nextPiece.length; row++) {
         for (let col = 0; col < nextPiece[row].length; col++) {
             if (nextPiece[row][col]) {
-                playerNextCtx.fillStyle = COLORS[nextType];
                 const x = (offsetX + col) * NEXT_BLOCK_SIZE + 4;
                 const y = (offsetY + row) * NEXT_BLOCK_SIZE + 4;
-                playerNextCtx.fillRect(x, y, NEXT_BLOCK_SIZE - 2, NEXT_BLOCK_SIZE - 2);
+                drawNextBlock(playerNextCtx, x, y, COLORS[nextType]);
             }
         }
     }
+}
+
+function drawNextBlock(ctx, x, y, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, NEXT_BLOCK_SIZE - 2, NEXT_BLOCK_SIZE - 2);
+    
+    // Highlight
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.fillRect(x + 1, y + 1, NEXT_BLOCK_SIZE - 4, 2);
+    
+    // Shadow
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.fillRect(x + 1, y + NEXT_BLOCK_SIZE - 3, NEXT_BLOCK_SIZE - 4, 2);
 }
 
 function sendGameUpdate() {
@@ -538,16 +779,21 @@ function sendGameUpdate() {
         score: score,
         lines: lines,
         level: level,
-        nextPiece: { type: nextType, piece: nextPiece }
+        nextPiece: { type: nextType, piece: nextPiece },
+        currentPiece: currentPiece,
+        currentX: currentX,
+        currentY: currentY,
+        currentType: currentType
     });
 }
 
 function gameOver() {
     gameRunning = false;
     if (gameInterval) {
-        clearInterval(gameInterval);
+        cancelAnimationFrame(gameInterval);
         gameInterval = null;
     }
+    soundManager.playGameOver();
     socket.emit('gameOver');
 }
 
@@ -557,29 +803,26 @@ socket.on('opponentUpdate', (data) => {
     document.getElementById('opponent-lines').textContent = data.lines;
     document.getElementById('opponent-level').textContent = data.level;
     
-    // Draw opponent board
-    drawOpponentBoard(data.board);
+    // Update opponent board
+    if (data.board) {
+        opponentBoard = data.board;
+    }
+    
+    // Update opponent current piece
+    if (data.currentPiece) {
+        opponentCurrentPiece = data.currentPiece;
+        opponentCurrentX = data.currentX || 0;
+        opponentCurrentY = data.currentY || 0;
+        opponentCurrentType = data.currentType || '';
+    }
     
     // Draw opponent next piece
     if (data.nextPiece) {
+        opponentNextPiece = data.nextPiece.piece;
+        opponentNextType = data.nextPiece.type;
         drawOpponentNextPiece(data.nextPiece);
     }
 });
-
-function drawOpponentBoard(opBoard) {
-    opponentCtx.fillStyle = '#0a0a1a';
-    opponentCtx.fillRect(0, 0, opponentBoard.width, opponentBoard.height);
-    
-    for (let row = 0; row < ROWS; row++) {
-        for (let col = 0; col < COLS; col++) {
-            if (opBoard[row] && opBoard[row][col]) {
-                const color = COLORS[opBoard[row][col]] || COLORS.GARBAGE;
-                opponentCtx.fillStyle = color;
-                opponentCtx.fillRect(col * BLOCK_SIZE + 1, row * BLOCK_SIZE + 1, BLOCK_SIZE - 2, BLOCK_SIZE - 2);
-            }
-        }
-    }
-}
 
 function drawOpponentNextPiece(nextPieceData) {
     opponentNextCtx.fillStyle = '#0a0a1a';
@@ -590,16 +833,15 @@ function drawOpponentNextPiece(nextPieceData) {
     
     if (!piece) return;
     
-    const offsetX = (4 - piece[0].length) / 2;
-    const offsetY = (4 - piece.length) / 2;
+    const offsetX = (5 - piece[0].length) / 2;
+    const offsetY = (5 - piece.length) / 2;
     
     for (let row = 0; row < piece.length; row++) {
         for (let col = 0; col < piece[row].length; col++) {
             if (piece[row][col]) {
-                opponentNextCtx.fillStyle = COLORS[type];
                 const x = (offsetX + col) * NEXT_BLOCK_SIZE + 4;
                 const y = (offsetY + row) * NEXT_BLOCK_SIZE + 4;
-                opponentNextCtx.fillRect(x, y, NEXT_BLOCK_SIZE - 2, NEXT_BLOCK_SIZE - 2);
+                drawNextBlock(opponentNextCtx, x, y, COLORS[type]);
             }
         }
     }
@@ -614,7 +856,7 @@ socket.on('receiveGarbage', (lineCount) => {
 socket.on('gameEnded', ({ winner, loser, hostScore, guestScore }) => {
     gameRunning = false;
     if (gameInterval) {
-        clearInterval(gameInterval);
+        cancelAnimationFrame(gameInterval);
         gameInterval = null;
     }
     
@@ -637,10 +879,12 @@ socket.on('gameRestart', ({ room }) => {
 });
 
 document.getElementById('play-again-btn').addEventListener('click', () => {
+    soundManager.playButton();
     socket.emit('requestRestart');
 });
 
 document.getElementById('back-to-menu-btn').addEventListener('click', () => {
+    soundManager.playButton();
     socket.emit('leaveRoom');
     gameOverModal.classList.add('hidden');
     currentRoom = null;
@@ -648,11 +892,30 @@ document.getElementById('back-to-menu-btn').addEventListener('click', () => {
     showScreen(menuScreen);
 });
 
-// Keyboard Controls
+// Keyboard Controls with smooth movement
+let keyStates = {};
+let lastKeyPress = {};
+
 document.addEventListener('keydown', (e) => {
     if (!gameRunning) return;
     
-    switch(e.code) {
+    const now = Date.now();
+    const key = e.code;
+    
+    // Prevent default for game keys
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(key)) {
+        e.preventDefault();
+    }
+    
+    // Handle key repeat with delay
+    if (keyStates[key] && now - lastKeyPress[key] < 100) {
+        return;
+    }
+    
+    keyStates[key] = true;
+    lastKeyPress[key] = now;
+    
+    switch(key) {
         case 'ArrowLeft':
             movePiece(-1, 0);
             break;
@@ -663,16 +926,21 @@ document.addEventListener('keydown', (e) => {
             rotatePiece();
             break;
         case 'ArrowDown':
-            if (movePiece(0, 1)) score += 1;
-            lastDrop = Date.now();
+            if (movePiece(0, 1)) {
+                score += 1;
+                lastDrop = Date.now();
+            }
             break;
         case 'Space':
-            e.preventDefault();
             hardDrop();
             break;
     }
     
     draw();
+});
+
+document.addEventListener('keyup', (e) => {
+    keyStates[e.code] = false;
 });
 
 // Initial rooms request

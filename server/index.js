@@ -160,6 +160,10 @@ io.on('connection', (socket) => {
       player.score = data.score;
       player.lines = data.lines;
       player.level = data.level;
+      player.currentPiece = data.currentPiece;
+      player.currentX = data.currentX;
+      player.currentY = data.currentY;
+      player.currentType = data.currentType;
       
       // Send update to opponent
       socket.to(roomId).emit('opponentUpdate', {
@@ -167,7 +171,11 @@ io.on('connection', (socket) => {
         score: data.score,
         lines: data.lines,
         level: data.level,
-        nextPiece: data.nextPiece
+        nextPiece: data.nextPiece,
+        currentPiece: data.currentPiece,
+        currentX: data.currentX,
+        currentY: data.currentY,
+        currentType: data.currentType
       });
     }
   });
