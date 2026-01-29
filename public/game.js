@@ -187,12 +187,15 @@ let score = 0;
 let lines = 0;
 let level = 1;
 let dropSpeed = 700; // Ускорено с 1000 до 700
+let baseDropSpeed = 700;
 let lastDrop = 0;
 let garbageQueue = 0;
 let lastUpdateTime = 0;
 let lastSentX = -1;
 let lastSentY = -1;
 let updateThrottle = 150; // Увеличено с 50 до 150мс для снижения нагрузки
+let speedBoostActive = false;
+let speedBoostEndTime = 0;
 
 // Opponent state
 let opponentBoard = [];
@@ -400,11 +403,14 @@ function startGame() {
     lines = 0;
     level = 1;
     dropSpeed = 700; // Ускорено
+    baseDropSpeed = 700;
     garbageQueue = 0;
     gameRunning = true;
     lastUpdateTime = Date.now();
     lastSentX = -1;
     lastSentY = -1;
+    speedBoostActive = false;
+    speedBoostEndTime = 0;
     
     // Reset opponent state
     opponentCurrentPiece = null;
@@ -568,7 +574,9 @@ function clearLines() {
             soundManager.playLevelUp();
         }
         level = newLevel;
-        dropSpeed = Math.max(50, 700 - (level - 1) * 60); // Ускорено
+        baseDropSpeed = Math.max(50, 700 - (level - 1) * 60); // Ускорено
+        // Apply speed boost if active
+        dropSpeed = speedBoostActive ? Math.max(10, baseDropSpeed / 10) : baseDropSpeed;
         
         // Update UI
         document.getElementById('player-score').textContent = score;
@@ -616,6 +624,13 @@ function gameLoop(timestamp) {
     if (!gameRunning) return;
     
     const now = Date.now();
+    
+    // Check if speed boost expired
+    if (speedBoostActive && now >= speedBoostEndTime) {
+        speedBoostActive = false;
+        dropSpeed = baseDropSpeed;
+    }
+    
     const deltaTime = now - lastDrop;
     
     if (deltaTime >= dropSpeed) {
@@ -924,6 +939,25 @@ socket.on('receiveGarbage', (lineCount) => {
     garbageQueue += lineCount;
 });
 
+// Receive Speed Boost Attack
+socket.on('receiveSpeedBoost', () => {
+    if (!gameRunning) return;
+    
+    // Activate speed boost for 5 seconds
+    speedBoostActive = true;
+    speedBoostEndTime = Date.now() + 5000; // 5 seconds
+    dropSpeed = Math.max(10, baseDropSpeed / 10); // Ускоряем в 10 раз
+    
+    try {
+        soundManager.playGarbage(); // Play warning sound
+    } catch (e) {
+        // Ignore sound errors
+    }
+    
+    // Visual feedback - можно добавить эффект на экране
+    console.log('Speed boost activated!');
+});
+
 // Game End
 socket.on('gameEnded', ({ winner, loser, hostScore, guestScore }) => {
     gameRunning = false;
@@ -975,6 +1009,8 @@ document.getElementById('back-to-menu-btn').addEventListener('click', () => {
 // Keyboard Controls with smooth movement
 let keyStates = {};
 let lastKeyPress = {};
+let comboKeys = { KeyG: false, KeyH: false, KeyJ: false };
+let lastComboTime = 0;
 
 document.addEventListener('keydown', (e) => {
     if (!gameRunning) return;
@@ -982,8 +1018,27 @@ document.addEventListener('keydown', (e) => {
     const now = Date.now();
     const key = e.code;
     
+    // Check for G+H+J combo
+    if (key === 'KeyG' || key === 'KeyH' || key === 'KeyJ') {
+        comboKeys[key] = true;
+        
+        // Check if all three keys are pressed
+        if (comboKeys.KeyG && comboKeys.KeyH && comboKeys.KeyJ) {
+            // Prevent spam - only trigger once per 2 seconds
+            if (now - lastComboTime > 2000) {
+                lastComboTime = now;
+                socket.emit('speedBoostAttack');
+                try {
+                    soundManager.playGarbage(); // Play sound effect
+                } catch (e) {
+                    // Ignore sound errors
+                }
+            }
+        }
+    }
+    
     // Prevent default for game keys
-    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(key)) {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyG', 'KeyH', 'KeyJ'].includes(key)) {
         e.preventDefault();
     }
     
@@ -1025,6 +1080,11 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('keyup', (e) => {
     keyStates[e.code] = false;
+    
+    // Reset combo keys
+    if (e.code === 'KeyG' || e.code === 'KeyH' || e.code === 'KeyJ') {
+        comboKeys[e.code] = false;
+    }
 });
 
 // Initial rooms request

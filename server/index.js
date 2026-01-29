@@ -188,6 +188,18 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Send speed boost attack to opponent
+  socket.on('speedBoostAttack', () => {
+    const roomId = playerRooms.get(socket.id);
+    const room = rooms.get(roomId);
+    
+    if (!room || room.status !== 'playing') return;
+    
+    // Send speed boost to opponent
+    socket.to(roomId).emit('receiveSpeedBoost');
+    console.log(`Speed boost attack sent in room: ${roomId}`);
+  });
+
   // Player game over
   socket.on('gameOver', () => {
     const roomId = playerRooms.get(socket.id);
