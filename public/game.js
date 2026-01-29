@@ -103,8 +103,8 @@ function applySettings() {
 // Game Constants - увеличенные размеры
 const COLS = 10;
 const ROWS = 20;
-const BLOCK_SIZE = 50; // Увеличено для больших размеров canvas (500x1000px)
-const NEXT_BLOCK_SIZE = 40; // Увеличено пропорционально
+const BLOCK_SIZE = 30;
+const NEXT_BLOCK_SIZE = 24;
 
 const COLORS = {
     I: '#00f5ff',
@@ -1804,8 +1804,16 @@ socket.on('playerRestart', ({ seed, opponentScore }) => {
     console.log('You restarted! Opponent score:', opponentScore);
 });
 
-// Opponent Restarted notification
+// Opponent Restarted notification — clear opponent board so no phantom tower
 socket.on('opponentRestarted', () => {
+    opponentBoard = createBoard();
+    opponentCurrentPiece = null;
+    opponentCurrentX = 0;
+    opponentCurrentY = 0;
+    opponentCurrentType = '';
+    opponentNextPiece = null;
+    opponentNextType = '';
+    opponentBoardNeedsFullUpdate = true;
     console.log('Opponent restarted!');
     notificationSystem.show('Opponent restarted!', 'info', 2000);
 });
