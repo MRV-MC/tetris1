@@ -24,11 +24,11 @@ const readyBtn = document.getElementById('ready-btn');
 const leaveRoomBtn = document.getElementById('leave-room-btn');
 
 const playerBoard = document.getElementById('player-board');
-const opponentBoard = document.getElementById('opponent-board');
+const opponentBoardCanvas = document.getElementById('opponent-board');
 const playerNext = document.getElementById('player-next');
 const opponentNext = document.getElementById('opponent-next');
 const playerCtx = playerBoard.getContext('2d');
-const opponentCtx = opponentBoard.getContext('2d');
+const opponentCtx = opponentBoardCanvas.getContext('2d');
 const playerNextCtx = playerNext.getContext('2d');
 const opponentNextCtx = opponentNext.getContext('2d');
 
@@ -85,6 +85,14 @@ class SoundManager {
         if (!this.soundsEnabled || !this.audioContext) return;
         
         try {
+            // Resume audio context if suspended (required by browsers)
+            if (this.audioContext.state === 'suspended') {
+                this.audioContext.resume().catch(() => {
+                    this.soundsEnabled = false;
+                    return;
+                });
+            }
+            
             const oscillator = this.audioContext.createOscillator();
             const gainNode = this.audioContext.createGain();
             
@@ -100,7 +108,8 @@ class SoundManager {
             oscillator.start(this.audioContext.currentTime);
             oscillator.stop(this.audioContext.currentTime + duration);
         } catch (e) {
-            // Ignore errors
+            // Disable sounds if there's an error
+            this.soundsEnabled = false;
         }
     }
 
@@ -227,20 +236,32 @@ socket.on('disconnect', () => {
 
 // Menu Events
 createRoomBtn.addEventListener('click', () => {
-    soundManager.playButton();
+    try {
+        soundManager.playButton();
+    } catch (e) {
+        // Ignore sound errors
+    }
     playerName = playerNameInput.value.trim() || 'Player';
     socket.emit('createRoom', playerName);
 });
 
 joinRoomBtn.addEventListener('click', () => {
-    soundManager.playButton();
+    try {
+        soundManager.playButton();
+    } catch (e) {
+        // Ignore sound errors
+    }
     joinForm.classList.toggle('hidden');
 });
 
 confirmJoinBtn.addEventListener('click', () => {
     const roomId = roomCodeInput.value.trim().toUpperCase();
     if (roomId) {
-        soundManager.playButton();
+        try {
+            soundManager.playButton();
+        } catch (e) {
+            // Ignore sound errors
+        }
         playerName = playerNameInput.value.trim() || 'Player';
         socket.emit('joinRoom', { roomId, playerName });
     }
@@ -264,7 +285,11 @@ socket.on('roomsList', (rooms) => {
 });
 
 window.quickJoin = function(roomId) {
-    soundManager.playButton();
+    try {
+        soundManager.playButton();
+    } catch (e) {
+        // Ignore sound errors
+    }
     playerName = playerNameInput.value.trim() || 'Player';
     socket.emit('joinRoom', { roomId, playerName });
 };
@@ -323,14 +348,22 @@ function updateLobby(room) {
 
 // Lobby Events
 readyBtn.addEventListener('click', () => {
-    soundManager.playButton();
+    try {
+        soundManager.playButton();
+    } catch (e) {
+        // Ignore sound errors
+    }
     isReady = !isReady;
     socket.emit('playerReady');
     readyBtn.textContent = isReady ? 'Waiting...' : 'Ready';
 });
 
 leaveRoomBtn.addEventListener('click', () => {
-    soundManager.playButton();
+    try {
+        soundManager.playButton();
+    } catch (e) {
+        // Ignore sound errors
+    }
     socket.emit('leaveRoom');
     currentRoom = null;
     isReady = false;
@@ -636,7 +669,7 @@ function drawPlayerBoard() {
 function drawOpponentBoard() {
     // Clear canvas
     opponentCtx.fillStyle = '#0a0a1a';
-    opponentCtx.fillRect(0, 0, opponentBoard.width, opponentBoard.height);
+    opponentCtx.fillRect(0, 0, opponentBoardCanvas.width, opponentBoardCanvas.height);
     
     // Draw opponent board
     for (let row = 0; row < ROWS; row++) {
@@ -879,12 +912,20 @@ socket.on('gameRestart', ({ room }) => {
 });
 
 document.getElementById('play-again-btn').addEventListener('click', () => {
-    soundManager.playButton();
+    try {
+        soundManager.playButton();
+    } catch (e) {
+        // Ignore sound errors
+    }
     socket.emit('requestRestart');
 });
 
 document.getElementById('back-to-menu-btn').addEventListener('click', () => {
-    soundManager.playButton();
+    try {
+        soundManager.playButton();
+    } catch (e) {
+        // Ignore sound errors
+    }
     socket.emit('leaveRoom');
     gameOverModal.classList.add('hidden');
     currentRoom = null;
