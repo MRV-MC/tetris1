@@ -983,7 +983,7 @@ document.addEventListener('keydown', (e) => {
     const key = e.code;
     
     // Prevent default for game keys
-    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(key)) {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(key)) {
         e.preventDefault();
     }
     
@@ -997,15 +997,19 @@ document.addEventListener('keydown', (e) => {
     
     switch(key) {
         case 'ArrowLeft':
+        case 'KeyA':
             movePiece(-1, 0);
             break;
         case 'ArrowRight':
+        case 'KeyD':
             movePiece(1, 0);
             break;
         case 'ArrowUp':
+        case 'KeyW':
             rotatePiece();
             break;
         case 'ArrowDown':
+        case 'KeyS':
             if (movePiece(0, 1)) {
                 score += 1;
                 lastDrop = Date.now();
