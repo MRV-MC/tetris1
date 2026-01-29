@@ -19,6 +19,9 @@ app.use(express.static(path.join(__dirname, '../public')));
 // Game rooms storage
 const rooms = new Map();
 const playerRooms = new Map();
+// Grace period timers: roomId -> timeout (clear on rejoin)
+const disconnectTimers = new Map();
+const RECONNECT_GRACE_MS = 30000;
 
 // Room class
 class GameRoom {
@@ -73,13 +76,60 @@ class GameRoom {
 
   removePlayer(playerId) {
     if (this.host && this.host.id === playerId) {
-      if (this.guest) {
+      if (this.guest && this.guest.id) {
         this.host = this.guest;
         this.guest = null;
       } else {
         return true; // Room should be deleted
       }
     } else if (this.guest && this.guest.id === playerId) {
+      this.guest = null;
+    }
+    return false;
+  }
+
+  // Mark player as disconnected (grace period for reconnect)
+  markDisconnected(playerId) {
+    if (this.host && this.host.id === playerId) {
+      this.host.disconnectedAt = Date.now();
+      this.host.id = null;
+      return 'host';
+    }
+    if (this.guest && this.guest.id === playerId) {
+      this.guest.disconnectedAt = Date.now();
+      this.guest.id = null;
+      return 'guest';
+    }
+    return null;
+  }
+
+  // Rejoin: assign new socket.id to disconnected slot with matching name
+  tryRejoin(socketId, playerName) {
+    if (this.host && this.host.name === playerName && this.host.id === null) {
+      this.host.id = socketId;
+      this.host.disconnectedAt = null;
+      return true;
+    }
+    if (this.guest && this.guest.name === playerName && this.guest.id === null) {
+      this.guest.id = socketId;
+      this.guest.disconnectedAt = null;
+      return true;
+    }
+    return false;
+  }
+
+  // Remove disconnected slot after grace period (returns true if room should be deleted)
+  removeDisconnectedIfExpired(graceMs) {
+    const now = Date.now();
+    if (this.host && this.host.id === null && this.host.disconnectedAt && (now - this.host.disconnectedAt >= graceMs)) {
+      if (this.guest && this.guest.id) {
+        this.host = this.guest;
+        this.guest = null;
+      } else {
+        return true; // Room empty
+      }
+    }
+    if (this.guest && this.guest.id === null && this.guest.disconnectedAt && (now - this.guest.disconnectedAt >= graceMs)) {
       this.guest = null;
     }
     return false;
@@ -98,7 +148,11 @@ class GameRoom {
   }
 
   isFull() {
-    return this.host && this.guest;
+    return !!(this.host && this.guest);
+  }
+
+  hasDisconnectedSlot() {
+    return (this.host && this.host.id === null) || (this.guest && this.guest.id === null);
   }
 
   bothReady() {
@@ -108,10 +162,10 @@ class GameRoom {
   toJSON() {
     return {
       id: this.id,
-      host: this.host ? { name: this.host.name, ready: this.host.ready, rating: this.host.rating } : null,
-      guest: this.guest ? { name: this.guest.name, ready: this.guest.ready, rating: this.guest.rating } : null,
+      host: this.host ? { name: this.host.name, ready: this.host.ready, rating: this.host.rating, disconnected: this.host.id === null } : null,
+      guest: this.guest ? { name: this.guest.name, ready: this.guest.ready, rating: this.guest.rating, disconnected: this.guest.id === null } : null,
       status: this.status,
-      playerCount: (this.host ? 1 : 0) + (this.guest ? 1 : 0)
+      playerCount: (this.host && this.host.id ? 1 : 0) + (this.guest && this.guest.id ? 1 : 0)
     };
   }
 }
@@ -131,6 +185,30 @@ io.on('connection', (socket) => {
     socket.emit('roomCreated', { roomId, room: room.toJSON() });
     io.emit('roomsList', getRoomsList());
     console.log(`Room created: ${roomId} by ${playerName}`);
+  });
+
+  // Rejoin room after disconnect (e.g. page refresh)
+  socket.on('rejoinRoom', ({ roomId, playerName }) => {
+    const room = rooms.get(roomId);
+    if (!room) {
+      socket.emit('error', { message: 'Room not found' });
+      return;
+    }
+    if (!room.tryRejoin(socket.id, playerName || '')) {
+      socket.emit('error', { message: 'Could not rejoin (slot expired or name mismatch)' });
+      return;
+    }
+    // Clear grace-period timer if any
+    if (disconnectTimers.has(roomId)) {
+      clearTimeout(disconnectTimers.get(roomId));
+      disconnectTimers.delete(roomId);
+    }
+    playerRooms.set(socket.id, roomId);
+    socket.join(roomId);
+    socket.emit('roomJoined', { roomId, room: room.toJSON() });
+    socket.to(roomId).emit('playerRejoined', { room: room.toJSON() });
+    io.emit('roomsList', getRoomsList());
+    console.log(`${playerName} rejoined room: ${roomId}`);
   });
 
   // Join existing room
@@ -308,9 +386,9 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('gameRestart', { room: room.toJSON() });
   });
 
-  // Leave room
+  // Leave room (intentional - free slot immediately)
   socket.on('leaveRoom', () => {
-    handlePlayerLeave(socket);
+    handlePlayerLeave(socket, true);
   });
 
   // Get rooms list
@@ -318,28 +396,49 @@ io.on('connection', (socket) => {
     socket.emit('roomsList', getRoomsList());
   });
 
-  // Disconnect
+  // Disconnect (e.g. refresh - grace period for rejoin)
   socket.on('disconnect', () => {
     console.log(`Player disconnected: ${socket.id}`);
-    handlePlayerLeave(socket);
+    handlePlayerLeave(socket, false);
   });
 });
 
-function handlePlayerLeave(socket) {
+function handlePlayerLeave(socket, intentionalLeave) {
   const roomId = playerRooms.get(socket.id);
   
   if (roomId) {
     const room = rooms.get(roomId);
     
     if (room) {
-      const shouldDelete = room.removePlayer(socket.id);
-      
-      if (shouldDelete) {
-        rooms.delete(roomId);
+      if (intentionalLeave) {
+        const shouldDelete = room.removePlayer(socket.id);
+        if (shouldDelete) {
+          rooms.delete(roomId);
+        } else {
+          room.status = 'waiting';
+          if (room.host) room.host.ready = false;
+          socket.to(roomId).emit('playerLeft', { room: room.toJSON() });
+        }
       } else {
-        room.status = 'waiting';
-        if (room.host) room.host.ready = false;
-        socket.to(roomId).emit('playerLeft', { room: room.toJSON() });
+        const slot = room.markDisconnected(socket.id);
+        if (slot) {
+          if (disconnectTimers.has(roomId)) clearTimeout(disconnectTimers.get(roomId));
+          const timer = setTimeout(() => {
+            disconnectTimers.delete(roomId);
+            const shouldDelete = room.removeDisconnectedIfExpired(RECONNECT_GRACE_MS);
+            if (shouldDelete) {
+              rooms.delete(roomId);
+            } else {
+              room.status = 'waiting';
+              if (room.host) room.host.ready = false;
+              if (room.guest) room.guest.ready = false;
+              io.to(roomId).emit('playerLeft', { room: room.toJSON() });
+            }
+            io.emit('roomsList', getRoomsList());
+          }, RECONNECT_GRACE_MS);
+          disconnectTimers.set(roomId, timer);
+          socket.to(roomId).emit('playerLeft', { room: room.toJSON() });
+        }
       }
     }
     

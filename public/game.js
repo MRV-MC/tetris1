@@ -530,12 +530,36 @@ function showScreen(screen) {
     if (screen) screen.classList.add('active');
 }
 
+// Persist room/name for rejoin after refresh
+const REJOIN_KEY = 'tetrisRejoin';
+function saveRejoinData() {
+    if (currentRoom && playerName) {
+        try {
+            localStorage.setItem(REJOIN_KEY, JSON.stringify({ roomId: currentRoom, playerName }));
+        } catch (e) { /* ignore */ }
+    }
+}
+function clearRejoinData() {
+    try { localStorage.removeItem(REJOIN_KEY); } catch (e) { /* ignore */ }
+}
+
 // Connection Status
 socket.on('connect', () => {
     statusDot.classList.remove('disconnected');
     statusDot.classList.add('connected');
     statusText.textContent = 'Connected';
-    socket.emit('getRooms');
+    const rejoin = (() => {
+        try {
+            const raw = localStorage.getItem(REJOIN_KEY);
+            return raw ? JSON.parse(raw) : null;
+        } catch (e) { return null; }
+    })();
+    if (rejoin && rejoin.roomId && rejoin.playerName) {
+        playerName = rejoin.playerName;
+        socket.emit('rejoinRoom', { roomId: rejoin.roomId, playerName });
+    } else {
+        socket.emit('getRooms');
+    }
     console.log('Socket connected');
 });
 
@@ -616,12 +640,14 @@ window.quickJoin = function(roomId) {
 // Room Events
 socket.on('roomCreated', ({ roomId, room }) => {
     currentRoom = roomId;
+    saveRejoinData();
     updateLobby(room);
     showScreen(lobbyScreen);
 });
 
 socket.on('roomJoined', ({ roomId, room }) => {
     currentRoom = roomId;
+    saveRejoinData();
     updateLobby(room);
     showScreen(lobbyScreen);
 });
@@ -641,7 +667,12 @@ socket.on('playerLeft', ({ room }) => {
     readyBtn.classList.remove('btn-success');
 });
 
+socket.on('playerRejoined', ({ room }) => {
+    updateLobby(room);
+});
+
 socket.on('error', ({ message }) => {
+    clearRejoinData();
     alert(message);
 });
 
@@ -660,7 +691,7 @@ function updateLobby(room) {
     const isHost = room.host && room.host.name === playerName;
     
     if (room.host) {
-        const hostDisplayName = room.host.name;
+        const hostDisplayName = room.host.name + (room.host.disconnected ? ' (reconnecting…)' : '');
         if (room.host.rating !== undefined && room.host.rating !== null) {
             const rank = getRankInfo(room.host.rating);
             hostNameSpan.innerHTML = `${hostDisplayName} <span style="color: ${rank.color}; font-size: 0.8em;">[${rank.name} ${room.host.rating}]</span>`;
@@ -672,12 +703,12 @@ function updateLobby(room) {
         } else {
             hostNameSpan.textContent = hostDisplayName;
         }
-        hostStatus.textContent = room.host.ready ? 'Ready' : 'Not Ready';
-        hostStatus.className = 'status ' + (room.host.ready ? 'ready' : 'not-ready');
+        hostStatus.textContent = room.host.disconnected ? '…' : (room.host.ready ? 'Ready' : 'Not Ready');
+        hostStatus.className = 'status ' + (room.host.disconnected ? '' : (room.host.ready ? 'ready' : 'not-ready'));
     }
     
     if (room.guest) {
-        const guestDisplayName = room.guest.name;
+        const guestDisplayName = room.guest.name + (room.guest.disconnected ? ' (reconnecting…)' : '');
         if (room.guest.rating !== undefined && room.guest.rating !== null) {
             const rank = getRankInfo(room.guest.rating);
             guestNameSpan.innerHTML = `${guestDisplayName} <span style="color: ${rank.color}; font-size: 0.8em;">[${rank.name} ${room.guest.rating}]</span>`;
@@ -689,8 +720,8 @@ function updateLobby(room) {
         } else {
             guestNameSpan.textContent = guestDisplayName;
         }
-        guestStatus.textContent = room.guest.ready ? 'Ready' : 'Not Ready';
-        guestStatus.className = 'status ' + (room.guest.ready ? 'ready' : 'not-ready');
+        guestStatus.textContent = room.guest.disconnected ? '…' : (room.guest.ready ? 'Ready' : 'Not Ready');
+        guestStatus.className = 'status ' + (room.guest.disconnected ? '' : (room.guest.ready ? 'ready' : 'not-ready'));
     } else {
         guestNameSpan.textContent = 'Waiting...';
         guestStatus.textContent = '-';
@@ -718,6 +749,7 @@ leaveRoomBtn.addEventListener('click', () => {
     }
     socket.emit('leaveRoom');
     currentRoom = null;
+    clearRejoinData();
     isReady = false;
     readyBtn.textContent = 'Ready';
     showScreen(menuScreen);
@@ -1450,10 +1482,9 @@ function sendGameUpdate() {
     if (!gameRunning || !socket.connected) return;
     
     try {
-        // Calculate board delta for optimization
-        const boardDelta = calculateBoardDelta(lastSentBoard, board);
-        
+        // Always send full board to avoid opponent freeze (no delta)
         const updateData = {
+            board: board.map(row => [...row]),
             score: score,
             lines: lines,
             level: level,
@@ -1464,16 +1495,6 @@ function sendGameUpdate() {
             currentY: currentY,
             currentType: currentType
         };
-        
-        // Send delta if efficient, otherwise send full board
-        // Always send full board if lastSentBoard is null (after restart or first update)
-        if (lastSentBoard === null || !boardDelta) {
-            updateData.board = board;
-            lastSentBoard = board.map(row => [...row]); // Deep copy
-        } else {
-            updateData.boardDelta = boardDelta;
-        }
-        
         socket.emit('gameUpdate', updateData);
     } catch (e) {
         console.error('Error sending game update:', e);
@@ -1606,28 +1627,10 @@ socket.on('opponentUpdate', (data) => {
             document.getElementById('opponent-level').textContent = data.level;
         }
         
-        // Update opponent board (delta or full)
-        // Always prefer full board if available to avoid phantom blocks issue
+        // Update opponent board (always full board - no delta to avoid freeze)
         if (data.board && Array.isArray(data.board)) {
-            // Full board update - always use this when available to ensure consistency
-            opponentBoard = data.board.map(row => [...row]); // Deep copy
-            opponentBoardNeedsFullUpdate = false; // Full board received, can accept deltas now
-        } else if (data.boardDelta && Array.isArray(data.boardDelta) && !opponentBoardNeedsFullUpdate) {
-            // Apply delta updates only if no full board is available and we don't need full update
-            // Ensure opponentBoard has correct number of rows
-            while (opponentBoard.length < ROWS) {
-                opponentBoard.push(Array(COLS).fill(0));
-            }
-            
-            // Apply delta updates
-            for (const change of data.boardDelta) {
-                if (change.row >= 0 && change.row < ROWS && change.col >= 0 && change.col < COLS) {
-                    if (!opponentBoard[change.row]) {
-                        opponentBoard[change.row] = Array(COLS).fill(0);
-                    }
-                    opponentBoard[change.row][change.col] = change.value;
-                }
-            }
+            opponentBoard = data.board.map(row => [...row]);
+            opponentBoardNeedsFullUpdate = false;
         }
         
         // Update opponent current piece
@@ -1834,6 +1837,7 @@ document.getElementById('back-to-menu-btn').addEventListener('click', () => {
     socket.emit('leaveRoom');
     gameOverModal.classList.add('hidden');
     currentRoom = null;
+    clearRejoinData();
     isReady = false;
     showScreen(menuScreen);
 });
