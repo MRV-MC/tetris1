@@ -530,36 +530,12 @@ function showScreen(screen) {
     if (screen) screen.classList.add('active');
 }
 
-// Persist room/name for rejoin after refresh
-const REJOIN_KEY = 'tetrisRejoin';
-function saveRejoinData() {
-    if (currentRoom && playerName) {
-        try {
-            localStorage.setItem(REJOIN_KEY, JSON.stringify({ roomId: currentRoom, playerName }));
-        } catch (e) { /* ignore */ }
-    }
-}
-function clearRejoinData() {
-    try { localStorage.removeItem(REJOIN_KEY); } catch (e) { /* ignore */ }
-}
-
 // Connection Status
 socket.on('connect', () => {
     statusDot.classList.remove('disconnected');
     statusDot.classList.add('connected');
     statusText.textContent = 'Connected';
-    const rejoin = (() => {
-        try {
-            const raw = localStorage.getItem(REJOIN_KEY);
-            return raw ? JSON.parse(raw) : null;
-        } catch (e) { return null; }
-    })();
-    if (rejoin && rejoin.roomId && rejoin.playerName) {
-        playerName = rejoin.playerName;
-        socket.emit('rejoinRoom', { roomId: rejoin.roomId, playerName });
-    } else {
-        socket.emit('getRooms');
-    }
+    socket.emit('getRooms');
     console.log('Socket connected');
 });
 
@@ -640,14 +616,12 @@ window.quickJoin = function(roomId) {
 // Room Events
 socket.on('roomCreated', ({ roomId, room }) => {
     currentRoom = roomId;
-    saveRejoinData();
     updateLobby(room);
     showScreen(lobbyScreen);
 });
 
 socket.on('roomJoined', ({ roomId, room }) => {
     currentRoom = roomId;
-    saveRejoinData();
     updateLobby(room);
     showScreen(lobbyScreen);
 });
@@ -667,12 +641,7 @@ socket.on('playerLeft', ({ room }) => {
     readyBtn.classList.remove('btn-success');
 });
 
-socket.on('playerRejoined', ({ room }) => {
-    updateLobby(room);
-});
-
 socket.on('error', ({ message }) => {
-    clearRejoinData();
     alert(message);
 });
 
@@ -691,7 +660,7 @@ function updateLobby(room) {
     const isHost = room.host && room.host.name === playerName;
     
     if (room.host) {
-        const hostDisplayName = room.host.name + (room.host.disconnected ? ' (reconnecting…)' : '');
+        const hostDisplayName = room.host.name;
         if (room.host.rating !== undefined && room.host.rating !== null) {
             const rank = getRankInfo(room.host.rating);
             hostNameSpan.innerHTML = `${hostDisplayName} <span style="color: ${rank.color}; font-size: 0.8em;">[${rank.name} ${room.host.rating}]</span>`;
@@ -703,12 +672,12 @@ function updateLobby(room) {
         } else {
             hostNameSpan.textContent = hostDisplayName;
         }
-        hostStatus.textContent = room.host.disconnected ? '…' : (room.host.ready ? 'Ready' : 'Not Ready');
-        hostStatus.className = 'status ' + (room.host.disconnected ? '' : (room.host.ready ? 'ready' : 'not-ready'));
+        hostStatus.textContent = room.host.ready ? 'Ready' : 'Not Ready';
+        hostStatus.className = 'status ' + (room.host.ready ? 'ready' : 'not-ready');
     }
     
     if (room.guest) {
-        const guestDisplayName = room.guest.name + (room.guest.disconnected ? ' (reconnecting…)' : '');
+        const guestDisplayName = room.guest.name;
         if (room.guest.rating !== undefined && room.guest.rating !== null) {
             const rank = getRankInfo(room.guest.rating);
             guestNameSpan.innerHTML = `${guestDisplayName} <span style="color: ${rank.color}; font-size: 0.8em;">[${rank.name} ${room.guest.rating}]</span>`;
@@ -720,8 +689,8 @@ function updateLobby(room) {
         } else {
             guestNameSpan.textContent = guestDisplayName;
         }
-        guestStatus.textContent = room.guest.disconnected ? '…' : (room.guest.ready ? 'Ready' : 'Not Ready');
-        guestStatus.className = 'status ' + (room.guest.disconnected ? '' : (room.guest.ready ? 'ready' : 'not-ready'));
+        guestStatus.textContent = room.guest.ready ? 'Ready' : 'Not Ready';
+        guestStatus.className = 'status ' + (room.guest.ready ? 'ready' : 'not-ready');
     } else {
         guestNameSpan.textContent = 'Waiting...';
         guestStatus.textContent = '-';
@@ -749,7 +718,6 @@ leaveRoomBtn.addEventListener('click', () => {
     }
     socket.emit('leaveRoom');
     currentRoom = null;
-    clearRejoinData();
     isReady = false;
     readyBtn.textContent = 'Ready';
     showScreen(menuScreen);
@@ -1837,7 +1805,6 @@ document.getElementById('back-to-menu-btn').addEventListener('click', () => {
     socket.emit('leaveRoom');
     gameOverModal.classList.add('hidden');
     currentRoom = null;
-    clearRejoinData();
     isReady = false;
     showScreen(menuScreen);
 });
