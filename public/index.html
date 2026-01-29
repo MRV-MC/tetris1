@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tetris Online - Multiplayer</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Menu Screen -->
+    <div id="menu-screen" class="screen active">
+        <div class="container">
+            <h1 class="game-title">TETRIS</h1>
+            <h2 class="subtitle">ONLINE MULTIPLAYER</h2>
+            
+            <div class="menu-form">
+                <input type="text" id="player-name" placeholder="Your name" maxlength="15">
+                
+                <div class="button-group">
+                    <button id="create-room-btn" class="btn btn-primary">Create Room</button>
+                    <button id="join-room-btn" class="btn btn-secondary">Join Room</button>
+                </div>
+                
+                <div id="join-form" class="hidden">
+                    <input type="text" id="room-code" placeholder="Room Code" maxlength="6">
+                    <button id="confirm-join-btn" class="btn btn-accent">Join</button>
+                </div>
+            </div>
+            
+            <div class="rooms-section">
+                <h3>Available Rooms</h3>
+                <div id="rooms-list" class="rooms-list">
+                    <p class="no-rooms">No rooms available</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lobby Screen -->
+    <div id="lobby-screen" class="screen">
+        <div class="container">
+            <h2>Room: <span id="room-id"></span></h2>
+            
+            <div class="players-panel">
+                <div class="player-card">
+                    <h3>Host</h3>
+                    <p id="host-name">-</p>
+                    <span id="host-status" class="status">Not Ready</span>
+                </div>
+                <div class="vs">VS</div>
+                <div class="player-card">
+                    <h3>Guest</h3>
+                    <p id="guest-name">Waiting...</p>
+                    <span id="guest-status" class="status">-</span>
+                </div>
+            </div>
+            
+            <div class="lobby-actions">
+                <button id="ready-btn" class="btn btn-primary">Ready</button>
+                <button id="leave-room-btn" class="btn btn-danger">Leave Room</button>
+            </div>
+            
+            <p class="hint">Both players must be ready to start</p>
+        </div>
+    </div>
+
+    <!-- Game Screen -->
+    <div id="game-screen" class="screen">
+        <div class="game-container">
+            <!-- Player Board -->
+            <div class="game-panel player-panel">
+                <div class="panel-header">
+                    <h3 id="player-game-name">You</h3>
+                </div>
+                <div class="game-info">
+                    <div class="info-item">
+                        <span class="label">Score</span>
+                        <span id="player-score" class="value">0</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="label">Lines</span>
+                        <span id="player-lines" class="value">0</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="label">Level</span>
+                        <span id="player-level" class="value">1</span>
+                    </div>
+                </div>
+                <canvas id="player-board" width="200" height="400"></canvas>
+                <div class="next-piece">
+                    <span class="label">Next</span>
+                    <canvas id="player-next" width="80" height="80"></canvas>
+                </div>
+            </div>
+
+            <!-- Opponent Board -->
+            <div class="game-panel opponent-panel">
+                <div class="panel-header">
+                    <h3 id="opponent-game-name">Opponent</h3>
+                </div>
+                <div class="game-info">
+                    <div class="info-item">
+                        <span class="label">Score</span>
+                        <span id="opponent-score" class="value">0</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="label">Lines</span>
+                        <span id="opponent-lines" class="value">0</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="label">Level</span>
+                        <span id="opponent-level" class="value">1</span>
+                    </div>
+                </div>
+                <canvas id="opponent-board" width="200" height="400"></canvas>
+                <div class="next-piece">
+                    <span class="label">Next</span>
+                    <canvas id="opponent-next" width="80" height="80"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls-hint">
+            <p><kbd>←</kbd><kbd>→</kbd> Move | <kbd>↑</kbd> Rotate | <kbd>↓</kbd> Soft Drop | <kbd>Space</kbd> Hard Drop</p>
+        </div>
+    </div>
+
+    <!-- Game Over Modal -->
+    <div id="game-over-modal" class="modal hidden">
+        <div class="modal-content">
+            <h2 id="game-result">Game Over</h2>
+            <div class="final-scores">
+                <div class="final-score">
+                    <span id="winner-name">Winner</span>
+                    <span id="winner-score">0</span>
+                </div>
+                <div class="final-score loser">
+                    <span id="loser-name">Loser</span>
+                    <span id="loser-score">0</span>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="play-again-btn" class="btn btn-primary">Play Again</button>
+                <button id="back-to-menu-btn" class="btn btn-secondary">Back to Menu</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Connection Status -->
+    <div id="connection-status" class="connection-status">
+        <span class="status-dot"></span>
+        <span class="status-text">Connecting...</span>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
