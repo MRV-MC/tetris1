@@ -1269,10 +1269,6 @@ function drawOpponentBoard() {
     opponentCtx.fillStyle = '#0a0a1a';
     opponentCtx.fillRect(0, 0, opponentBoardCanvas.width, opponentBoardCanvas.height);
     
-    // #region agent log
-    fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1256',message:'drawOpponentBoard',data:{opponentBoardLength:opponentBoard.length,hasOpponentCurrentPiece:!!opponentCurrentPiece},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
-    
     // Draw opponent board
     for (let row = 0; row < ROWS; row++) {
         for (let col = 0; col < COLS; col++) {
@@ -1470,11 +1466,12 @@ function sendGameUpdate() {
         };
         
         // Send delta if efficient, otherwise send full board
-        if (boardDelta) {
-            updateData.boardDelta = boardDelta;
-        } else {
+        // Always send full board if lastSentBoard is null (after restart or first update)
+        if (lastSentBoard === null || !boardDelta) {
             updateData.board = board;
             lastSentBoard = board.map(row => [...row]); // Deep copy
+        } else {
+            updateData.boardDelta = boardDelta;
         }
         
         socket.emit('gameUpdate', updateData);
@@ -1535,6 +1532,9 @@ function restartPlayer() {
     // Reset drop timer
     lastDrop = Date.now();
     
+    // Send initial update with full board after restart
+    sendGameUpdate();
+    
     // Draw initial state
     draw();
 }
@@ -1592,10 +1592,6 @@ function saveGameStats() {
 
 // Opponent Updates
 socket.on('opponentUpdate', (data) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1579',message:'opponentUpdate received',data:{gameRunning,hasBoardDelta:!!data.boardDelta,hasBoard:!!data.board,opponentBoardLength:opponentBoard.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
-    
     if (!gameRunning) return;
     
     try {
@@ -1648,14 +1644,7 @@ socket.on('opponentUpdate', (data) => {
             opponentNextType = data.nextPiece.type;
             drawOpponentNextPiece(data.nextPiece);
         }
-        
-        // #region agent log
-        fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1625',message:'opponentUpdate processed',data:{opponentBoardLengthAfter:opponentBoard.length,opponentCurrentPiece:!!opponentCurrentPiece},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-        // #endregion
     } catch (e) {
-        // #region agent log
-        fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1627',message:'opponentUpdate error',data:{error:e.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-        // #endregion
         console.error('Error processing opponent update:', e);
     }
 });
@@ -1705,7 +1694,6 @@ socket.on('receiveSpeedBoost', () => {
     }
     
     notificationSystem.showSpeedBoost();
-    console.log('Speed boost activated!');
 });
 
 // Receive Piece Change Attack
@@ -1770,15 +1758,10 @@ socket.on('receivePieceChange', () => {
     
     sendGameUpdate();
     draw();
-    console.log('Piece changed to:', newType);
 });
 
 // Player Restart (when player loses)
 socket.on('playerRestart', ({ seed, opponentScore }) => {
-    // #region agent log
-    fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1741',message:'playerRestart received',data:{opponentBoardBefore:opponentBoard.length,opponentCurrentPiece:!!opponentCurrentPiece},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
-    
     // Restart with new seed
     gameSeed = seed;
     rng = new SeededRandom(seed);
@@ -1794,18 +1777,12 @@ socket.on('playerRestart', ({ seed, opponentScore }) => {
     opponentNextType = '';
     opponentBoardNeedsFullUpdate = true; // Require full board update after restart
     
-    // #region agent log
-    fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1750',message:'opponentBoard cleared',data:{opponentBoardAfter:opponentBoard.length,opponentCurrentPiece:!!opponentCurrentPiece,needsFullUpdate:opponentBoardNeedsFullUpdate},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
-    
     restartPlayer();
-    
-    // Show notification
-    console.log('You restarted! Opponent score:', opponentScore);
 });
 
 // Opponent Restarted notification — clear opponent board so no phantom tower
 socket.on('opponentRestarted', () => {
+    // Clear opponent board and state
     opponentBoard = createBoard();
     opponentCurrentPiece = null;
     opponentCurrentX = 0;
@@ -1813,8 +1790,9 @@ socket.on('opponentRestarted', () => {
     opponentCurrentType = '';
     opponentNextPiece = null;
     opponentNextType = '';
-    opponentBoardNeedsFullUpdate = true;
-    console.log('Opponent restarted!');
+    // Don't set opponentBoardNeedsFullUpdate = true here, because opponent will send updates
+    // and we want to accept them immediately. The board is already cleared, so delta updates will work.
+    opponentBoardNeedsFullUpdate = false;
     notificationSystem.show('Opponent restarted!', 'info', 2000);
 });
 
