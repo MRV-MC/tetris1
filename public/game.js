@@ -85,10 +85,8 @@ function saveSettings() {
 
 // Apply settings to game
 function applySettings() {
-    // Apply sound volume
-    if (soundManager && soundManager.audioContext) {
-        // Volume is handled per sound, we'll adjust in playTone
-    }
+    // Sound volume is handled per sound in playTone method
+    // No need to check soundManager here as it's created before loadSettings is called
     
     // Apply block size (would require canvas resize, complex)
     // For now, we'll keep current size
@@ -101,9 +99,6 @@ function applySettings() {
     
     // DAS speed is handled in keyboard controls
 }
-
-// Initialize settings
-loadSettings();
 
 // Game Constants - увеличенные размеры
 const COLS = 10;
@@ -238,6 +233,9 @@ class SoundManager {
 }
 
 const soundManager = new SoundManager();
+
+// Initialize settings after soundManager is created
+loadSettings();
 
 // Game State
 let currentRoom = null;
