@@ -190,6 +190,9 @@ let dropSpeed = 700; // Ускорено с 1000 до 700
 let lastDrop = 0;
 let garbageQueue = 0;
 let lastUpdateTime = 0;
+let lastSentX = -1;
+let lastSentY = -1;
+let updateThrottle = 150; // Увеличено с 50 до 150мс для снижения нагрузки
 
 // Opponent state
 let opponentBoard = [];
@@ -226,12 +229,21 @@ socket.on('connect', () => {
     statusDot.classList.add('connected');
     statusText.textContent = 'Connected';
     socket.emit('getRooms');
+    console.log('Socket connected');
 });
 
 socket.on('disconnect', () => {
     statusDot.classList.remove('connected');
     statusDot.classList.add('disconnected');
     statusText.textContent = 'Disconnected';
+    console.log('Socket disconnected');
+});
+
+socket.on('connect_error', (error) => {
+    console.error('Connection error:', error);
+    statusDot.classList.remove('connected');
+    statusDot.classList.add('disconnected');
+    statusText.textContent = 'Connection Error';
 });
 
 // Menu Events
@@ -391,6 +403,8 @@ function startGame() {
     garbageQueue = 0;
     gameRunning = true;
     lastUpdateTime = Date.now();
+    lastSentX = -1;
+    lastSentY = -1;
     
     // Reset opponent state
     opponentCurrentPiece = null;
@@ -611,9 +625,14 @@ function gameLoop(timestamp) {
         lastDrop = now;
     }
     
-    // Send updates more frequently for smoother opponent view
-    if (now - lastUpdateTime >= 50) { // Каждые 50мс
+    // Send updates only when piece position changed or periodically
+    const pieceMoved = (currentX !== lastSentX || currentY !== lastSentY);
+    const timeToUpdate = (now - lastUpdateTime >= updateThrottle);
+    
+    if (pieceMoved || timeToUpdate) {
         sendGameUpdate();
+        lastSentX = currentX;
+        lastSentY = currentY;
         lastUpdateTime = now;
     }
     
@@ -807,17 +826,24 @@ function drawNextBlock(ctx, x, y, color) {
 }
 
 function sendGameUpdate() {
-    socket.emit('gameUpdate', {
-        board: board,
-        score: score,
-        lines: lines,
-        level: level,
-        nextPiece: { type: nextType, piece: nextPiece },
-        currentPiece: currentPiece,
-        currentX: currentX,
-        currentY: currentY,
-        currentType: currentType
-    });
+    // Отправляем обновления только если игра запущена и есть соединение
+    if (!gameRunning || !socket.connected) return;
+    
+    try {
+        socket.emit('gameUpdate', {
+            board: board,
+            score: score,
+            lines: lines,
+            level: level,
+            nextPiece: { type: nextType, piece: nextPiece },
+            currentPiece: currentPiece,
+            currentX: currentX,
+            currentY: currentY,
+            currentType: currentType
+        });
+    } catch (e) {
+        console.error('Error sending game update:', e);
+    }
 }
 
 function gameOver() {
@@ -832,28 +858,41 @@ function gameOver() {
 
 // Opponent Updates
 socket.on('opponentUpdate', (data) => {
-    document.getElementById('opponent-score').textContent = data.score;
-    document.getElementById('opponent-lines').textContent = data.lines;
-    document.getElementById('opponent-level').textContent = data.level;
+    if (!gameRunning) return;
     
-    // Update opponent board
-    if (data.board) {
-        opponentBoard = data.board;
-    }
-    
-    // Update opponent current piece
-    if (data.currentPiece) {
-        opponentCurrentPiece = data.currentPiece;
-        opponentCurrentX = data.currentX || 0;
-        opponentCurrentY = data.currentY || 0;
-        opponentCurrentType = data.currentType || '';
-    }
-    
-    // Draw opponent next piece
-    if (data.nextPiece) {
-        opponentNextPiece = data.nextPiece.piece;
-        opponentNextType = data.nextPiece.type;
-        drawOpponentNextPiece(data.nextPiece);
+    try {
+        // Update UI
+        if (data.score !== undefined) {
+            document.getElementById('opponent-score').textContent = data.score;
+        }
+        if (data.lines !== undefined) {
+            document.getElementById('opponent-lines').textContent = data.lines;
+        }
+        if (data.level !== undefined) {
+            document.getElementById('opponent-level').textContent = data.level;
+        }
+        
+        // Update opponent board (only if provided)
+        if (data.board && Array.isArray(data.board)) {
+            opponentBoard = data.board;
+        }
+        
+        // Update opponent current piece
+        if (data.currentPiece && Array.isArray(data.currentPiece)) {
+            opponentCurrentPiece = data.currentPiece;
+            opponentCurrentX = data.currentX || 0;
+            opponentCurrentY = data.currentY || 0;
+            opponentCurrentType = data.currentType || '';
+        }
+        
+        // Draw opponent next piece
+        if (data.nextPiece && data.nextPiece.piece) {
+            opponentNextPiece = data.nextPiece.piece;
+            opponentNextType = data.nextPiece.type;
+            drawOpponentNextPiece(data.nextPiece);
+        }
+    } catch (e) {
+        console.error('Error processing opponent update:', e);
     }
 });
 
