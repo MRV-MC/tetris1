@@ -108,8 +108,8 @@ loadSettings();
 // Game Constants - увеличенные размеры
 const COLS = 10;
 const ROWS = 20;
-const BLOCK_SIZE = 30; // Увеличено с 20 до 30
-const NEXT_BLOCK_SIZE = 24; // Увеличено с 16 до 24
+const BLOCK_SIZE = 50; // Увеличено для больших размеров canvas (500x1000px)
+const NEXT_BLOCK_SIZE = 40; // Увеличено пропорционально
 
 const COLORS = {
     I: '#00f5ff',
@@ -403,6 +403,7 @@ let opponentCurrentY = 0;
 let opponentCurrentType = '';
 let opponentNextPiece = null;
 let opponentNextType = '';
+let opponentBoardNeedsFullUpdate = false; // Flag to ignore delta updates until full board received
 
 // Random generator with seed
 class SeededRandom {
@@ -772,6 +773,7 @@ function startGame() {
     // Reset opponent state
     opponentCurrentPiece = null;
     opponentNextPiece = null;
+    opponentBoardNeedsFullUpdate = false;
     
     // Update UI
     document.getElementById('player-score').textContent = '0';
@@ -937,6 +939,7 @@ function rotatePiece() {
         if (isTSpin) {
             // Bonus score for T-Spin
             score += 100 * level;
+            document.getElementById('player-score').textContent = score;
             notificationSystem.show('T-SPIN!', 'combo', 2000);
             try {
                 soundManager.playLevelUp(); // Special sound for T-Spin
@@ -996,6 +999,8 @@ function hardDrop() {
     while (movePiece(0, 1)) {
         score += 2;
     }
+    // Update UI
+    document.getElementById('player-score').textContent = score;
     lockPiece();
 }
 
@@ -1100,6 +1105,10 @@ function clearLines() {
         document.getElementById('player-lines').textContent = lines;
         document.getElementById('player-level').textContent = level;
         
+        // Reset lastSentBoard to force full board update after line clear
+        // This ensures opponent always gets complete board state after lines are cleared
+        lastSentBoard = null;
+        
         // Send garbage to opponent (if cleared 2+ lines or T-Spin)
         if (clearedLines >= 2) {
             const attackLines = clearedLines - 1;
@@ -1155,6 +1164,10 @@ function addGarbage() {
             garbageLine[hole] = 0;
             board.push(garbageLine);
         }
+        
+        // Reset lastSentBoard to force full board update after garbage
+        // This ensures opponent always gets complete board state
+        lastSentBoard = null;
     }
 }
 
@@ -1257,6 +1270,10 @@ function drawOpponentBoard() {
     // Clear canvas
     opponentCtx.fillStyle = '#0a0a1a';
     opponentCtx.fillRect(0, 0, opponentBoardCanvas.width, opponentBoardCanvas.height);
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1256',message:'drawOpponentBoard',data:{opponentBoardLength:opponentBoard.length,hasOpponentCurrentPiece:!!opponentCurrentPiece},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     
     // Draw opponent board
     for (let row = 0; row < ROWS; row++) {
@@ -1505,6 +1522,7 @@ function restartPlayer() {
     maxCombo = 0;
     currentCombo = 0;
     lastLineClearTime = 0;
+    lastSentBoard = null; // Reset board delta tracking
     
     // Update UI
     document.getElementById('player-score').textContent = '0';
@@ -1576,6 +1594,10 @@ function saveGameStats() {
 
 // Opponent Updates
 socket.on('opponentUpdate', (data) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1579',message:'opponentUpdate received',data:{gameRunning,hasBoardDelta:!!data.boardDelta,hasBoard:!!data.board,opponentBoardLength:opponentBoard.length},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    
     if (!gameRunning) return;
     
     try {
@@ -1591,17 +1613,27 @@ socket.on('opponentUpdate', (data) => {
         }
         
         // Update opponent board (delta or full)
-        if (data.boardDelta && Array.isArray(data.boardDelta)) {
+        // Always prefer full board if available to avoid phantom blocks issue
+        if (data.board && Array.isArray(data.board)) {
+            // Full board update - always use this when available to ensure consistency
+            opponentBoard = data.board.map(row => [...row]); // Deep copy
+            opponentBoardNeedsFullUpdate = false; // Full board received, can accept deltas now
+        } else if (data.boardDelta && Array.isArray(data.boardDelta) && !opponentBoardNeedsFullUpdate) {
+            // Apply delta updates only if no full board is available and we don't need full update
+            // Ensure opponentBoard has correct number of rows
+            while (opponentBoard.length < ROWS) {
+                opponentBoard.push(Array(COLS).fill(0));
+            }
+            
             // Apply delta updates
             for (const change of data.boardDelta) {
-                if (!opponentBoard[change.row]) {
-                    opponentBoard[change.row] = Array(COLS).fill(0);
+                if (change.row >= 0 && change.row < ROWS && change.col >= 0 && change.col < COLS) {
+                    if (!opponentBoard[change.row]) {
+                        opponentBoard[change.row] = Array(COLS).fill(0);
+                    }
+                    opponentBoard[change.row][change.col] = change.value;
                 }
-                opponentBoard[change.row][change.col] = change.value;
             }
-        } else if (data.board && Array.isArray(data.board)) {
-            // Full board update
-            opponentBoard = data.board;
         }
         
         // Update opponent current piece
@@ -1618,7 +1650,14 @@ socket.on('opponentUpdate', (data) => {
             opponentNextType = data.nextPiece.type;
             drawOpponentNextPiece(data.nextPiece);
         }
+        
+        // #region agent log
+        fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1625',message:'opponentUpdate processed',data:{opponentBoardLengthAfter:opponentBoard.length,opponentCurrentPiece:!!opponentCurrentPiece},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
     } catch (e) {
+        // #region agent log
+        fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1627',message:'opponentUpdate error',data:{error:e.message},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+        // #endregion
         console.error('Error processing opponent update:', e);
     }
 });
@@ -1738,10 +1777,28 @@ socket.on('receivePieceChange', () => {
 
 // Player Restart (when player loses)
 socket.on('playerRestart', ({ seed, opponentScore }) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1741',message:'playerRestart received',data:{opponentBoardBefore:opponentBoard.length,opponentCurrentPiece:!!opponentCurrentPiece},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+    
     // Restart with new seed
     gameSeed = seed;
     rng = new SeededRandom(seed);
     pieceIndex = 0;
+    
+    // Clear opponent board and state when player restarts
+    opponentBoard = createBoard();
+    opponentCurrentPiece = null;
+    opponentCurrentX = 0;
+    opponentCurrentY = 0;
+    opponentCurrentType = '';
+    opponentNextPiece = null;
+    opponentNextType = '';
+    opponentBoardNeedsFullUpdate = true; // Require full board update after restart
+    
+    // #region agent log
+    fetch('http://127.0.0.1:7246/ingest/e1ba25bf-71ce-425f-8725-b8a8e4c9e06c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'game.js:1750',message:'opponentBoard cleared',data:{opponentBoardAfter:opponentBoard.length,opponentCurrentPiece:!!opponentCurrentPiece,needsFullUpdate:opponentBoardNeedsFullUpdate},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     
     restartPlayer();
     
@@ -1881,6 +1938,7 @@ document.addEventListener('keydown', (e) => {
         case 'KeyS':
             if (movePiece(0, 1)) {
                 score += 1;
+                document.getElementById('player-score').textContent = score;
                 lastDrop = Date.now();
             }
             break;
